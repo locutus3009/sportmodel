@@ -15,11 +15,12 @@ sportmodel/
 │   ├── formulas.rs     # Strength calculation formulas (e1RM, IPF GL, Sinclair)
 │   ├── gp.rs           # Gaussian Process regression implementation
 │   ├── analysis.rs     # Analysis orchestration and higher-level functions
-│   └── server.rs       # Web server (axum) with REST API and static file serving
+│   ├── server.rs       # Web server (axum) with REST API, WebSocket, and static serving
+│   └── watcher.rs      # File watching with debouncing for live reload
 ├── static/
 │   ├── index.html      # Dashboard HTML with tab navigation
 │   ├── style.css       # Dark theme styles
-│   └── app.js          # Chart.js visualization and tab logic
+│   └── app.js          # Chart.js visualization, tab logic, and WebSocket client
 ├── scripts/
 │   └── generate_test_data.py  # Test data generator
 └── test_data.xlsx      # Sample test file
@@ -61,10 +62,19 @@ sportmodel/
 - `find_most_reliable_date_*`: Staleness calculation for composite indices
 
 ### server.rs
-- `AppState`: Shared state with training data and analysis results
-- `create_router()`: Configures axum routes and static file serving
+- `AnalysisData`: Mutable data container (training data, analyses, composites)
+- `AppState`: Shared state with `RwLock<AnalysisData>`, file path, and WebSocket broadcast
+- `WsMessage`: WebSocket message types (`DataUpdated`, `Error`)
+- `create_router()`: Configures axum routes, WebSocket endpoint, and static file serving
 - `run_server()`: Starts the HTTP server
+- `ws_handler()`: WebSocket upgrade handler for live updates
 - REST API handlers for movements and composite indices
+
+### watcher.rs
+- `WatcherConfig`: Configuration (debounce duration, retry attempts, retry delay)
+- `watch_file()`: Watches a file for modifications with debouncing
+- `Debouncer`: Collapses rapid successive events into single callbacks
+- Uses notify crate for cross-platform file system watching
 
 ## Build and Run
 
@@ -95,6 +105,9 @@ After starting the server, open http://localhost:8080 in your browser.
 - **Observations**: Green dots showing actual measurements
 - **Today line**: Dashed vertical line marking the current date
 - **Dark theme**: Easy on the eyes
+- **Live reload**: Charts automatically refresh when Excel file changes
+- **Connection indicator**: Green dot shows live connection status
+- **Toast notifications**: Brief popup when data updates
 
 ### API Endpoints
 
@@ -112,7 +125,40 @@ curl http://localhost:8080/api/movement/bodyweight
 
 # Get composite indices (IPF GL and Sinclair)
 curl http://localhost:8080/api/composites
+
+# WebSocket endpoint for live updates
+# Connect to ws://localhost:8080/ws
+# Receives "reload" message when data changes
 ```
+
+## Live Reload
+
+The server watches the Excel file for modifications and automatically reloads data when changes are detected.
+
+### How It Works
+1. File watcher monitors the Excel file using the notify crate
+2. Changes are debounced (2 second window) to handle rapid successive writes
+3. On change, data is reloaded with retry logic (3 attempts, 500ms delay)
+4. WebSocket broadcasts "reload" message to all connected browsers
+5. Frontend clears cache and refreshes the current chart
+
+### Debouncing
+Syncthing and Excel may trigger multiple file system events for a single save:
+- File created (temp file)
+- File modified (multiple writes)
+- File renamed (atomic replace)
+
+The debouncer collapses these into a single reload after activity settles.
+
+### Error Handling
+- If reload fails, retries up to 3 times with 500ms delay between attempts
+- On permanent failure, WebSocket receives "error:message" and toast shows error
+- Old data remains displayed until successful reload
+
+### Connection States
+- **Live** (green): WebSocket connected, receiving updates
+- **Offline** (red): WebSocket disconnected, no live updates
+- **Reconnecting** (orange): Attempting to reconnect with exponential backoff
 
 ## Data Flow
 
@@ -121,8 +167,9 @@ curl http://localhost:8080/api/composites
 3. **Processing**: `TrainingData::from_observations` converts to DataPoints (e1RM values)
 4. **GP Regression**: `analyze_training_data()` fits GP models per movement
 5. **Composite Indices**: IPF GL and Sinclair calculated from component predictions
-6. **Web Server**: Serves JSON API and static frontend
+6. **Web Server**: Serves JSON API, WebSocket, and static frontend
 7. **Visualization**: Chart.js renders predictions with confidence intervals
+8. **Live Updates**: File watcher detects changes, reloads data, notifies browsers via WebSocket
 
 ## Input Format
 
@@ -166,3 +213,27 @@ Squared exponential (RBF): `k(x, x') = σ² × exp(-0.5 × (x - x')² / l²)`
 
 ### Uncertainty Propagation
 Composite index uncertainty uses the maximum relative uncertainty from component lifts.
+
+## Troubleshooting
+
+### Live reload not working
+- Check the connection indicator in the top-right corner
+- If "Offline", the WebSocket connection may be blocked by a proxy
+- Try refreshing the page to reconnect
+- Check server logs with `RUST_LOG=info` for file watcher messages
+
+### Charts not updating
+- Verify the Excel file was actually saved (not just opened)
+- Wait for debounce timeout (2 seconds after last file activity)
+- Check browser console for WebSocket errors
+- Clear browser cache and refresh
+
+### Connection indicator stuck on "Reconnecting"
+- Server may have crashed - check terminal for errors
+- Port may be blocked - try a different port
+- Browser may be blocking WebSocket - check browser security settings
+
+### File watcher errors
+- Ensure the Excel file path is valid and accessible
+- On Linux, check inotify limits: `cat /proc/sys/fs/inotify/max_user_watches`
+- Increase limit if needed: `sudo sysctl fs.inotify.max_user_watches=524288`

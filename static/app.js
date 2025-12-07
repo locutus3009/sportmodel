@@ -22,6 +22,12 @@ const COLORS = {
     text: '#b0b0b0',
 };
 
+// WebSocket state
+let ws = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_DELAY_MS = 2000;
+
 // Initialize on load
 document.addEventListener('DOMContentLoaded', init);
 
@@ -30,6 +36,119 @@ function init() {
     setupTabs();
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
+    connectWebSocket();
+}
+
+// === WebSocket Connection ===
+
+function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+    console.log('Connecting to WebSocket:', wsUrl);
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        console.log('WebSocket connected');
+        reconnectAttempts = 0;
+        showConnectionStatus('connected');
+    };
+
+    ws.onmessage = (event) => {
+        console.log('WebSocket message:', event.data);
+
+        if (event.data === 'reload') {
+            showNotification('Data updated');
+            clearCache();
+            reloadCurrentTab();
+        } else if (event.data.startsWith('error:')) {
+            const errorMsg = event.data.substring(6);
+            showNotification('Error: ' + errorMsg, true);
+        }
+    };
+
+    ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        showConnectionStatus('disconnected');
+        scheduleReconnect();
+    };
+
+    ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+}
+
+function scheduleReconnect() {
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts++;
+        showConnectionStatus('reconnecting');
+        const delay = RECONNECT_DELAY_MS * Math.min(reconnectAttempts, 5);
+        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+        setTimeout(connectWebSocket, delay);
+    } else {
+        console.log('Max reconnect attempts reached');
+        showConnectionStatus('disconnected');
+    }
+}
+
+function clearCache() {
+    // Clear all cached data so next load fetches fresh data
+    for (const key in dataCache) {
+        delete dataCache[key];
+    }
+}
+
+function reloadCurrentTab() {
+    loadTabData(currentTab);
+}
+
+function showConnectionStatus(status) {
+    const statusEl = document.getElementById('connectionStatus');
+    const dotEl = statusEl?.querySelector('.status-dot');
+    const textEl = statusEl?.querySelector('.status-text');
+
+    if (!statusEl || !dotEl || !textEl) return;
+
+    dotEl.classList.remove('connected', 'disconnected', 'reconnecting');
+
+    switch (status) {
+        case 'connected':
+            dotEl.classList.add('connected');
+            textEl.textContent = 'Live';
+            break;
+        case 'disconnected':
+            dotEl.classList.add('disconnected');
+            textEl.textContent = 'Offline';
+            break;
+        case 'reconnecting':
+            dotEl.classList.add('reconnecting');
+            textEl.textContent = 'Reconnecting...';
+            break;
+    }
+}
+
+function showNotification(message, isError = false) {
+    // Remove existing toast if any
+    const existing = document.querySelector('.toast');
+    if (existing) {
+        existing.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast' + (isError ? ' error' : '');
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(() => {
+        toast.classList.add('visible');
+    });
+
+    // Remove after 3 seconds
+    setTimeout(() => {
+        toast.classList.remove('visible');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
 }
 
 function setupTabs() {

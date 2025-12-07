@@ -1,7 +1,7 @@
 //! Web server for serving the training analytics dashboard.
 //!
 //! Provides a REST API for movement data and composite indices,
-//! plus static file serving for the frontend.
+//! WebSocket for live updates, and static file serving for the frontend.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -10,25 +10,50 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{
+        Path, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
     routing::get,
 };
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use serde::Serialize;
+use tokio::sync::{RwLock, broadcast};
 use tower_http::services::ServeDir;
 
 use crate::analysis::MovementAnalysis;
 use crate::domain::{Movement, TrainingData};
 
-/// Shared application state.
-pub struct AppState {
+/// Message types for WebSocket broadcast.
+#[derive(Clone, Debug)]
+pub enum WsMessage {
+    /// Data has been reloaded successfully.
+    DataUpdated,
+    /// An error occurred during reload.
+    Error(String),
+}
+
+/// Mutable analysis data that can be reloaded.
+pub struct AnalysisData {
     #[allow(dead_code)] // May be used for future features
     pub training_data: TrainingData,
     pub analyses: HashMap<Movement, MovementAnalysis>,
     pub ipf_gl: Option<CompositeAnalysis>,
     pub sinclair: Option<CompositeAnalysis>,
+    #[allow(dead_code)] // May be used for future features
+    pub last_reload: chrono::DateTime<Utc>,
+}
+
+/// Shared application state with reloadable data.
+pub struct AppState {
+    /// The analysis data, protected by RwLock for concurrent reads.
+    pub data: RwLock<AnalysisData>,
+    /// Path to the Excel file for reloading.
+    pub file_path: PathBuf,
+    /// Broadcast channel for WebSocket notifications.
+    pub ws_broadcast: broadcast::Sender<WsMessage>,
 }
 
 /// Analysis data for composite indices (IPF GL, Sinclair).
@@ -100,8 +125,69 @@ pub fn create_router(state: Arc<AppState>, static_dir: PathBuf) -> Router {
         .route("/api/movements", get(get_movements))
         .route("/api/movement/{name}", get(get_movement_data))
         .route("/api/composites", get(get_composites))
+        .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .with_state(state)
+}
+
+// === WebSocket Handler ===
+
+/// WebSocket upgrade handler for live updates.
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_ws_connection(socket, state))
+}
+
+/// Handles an individual WebSocket connection.
+async fn handle_ws_connection(mut socket: WebSocket, state: Arc<AppState>) {
+    log::info!("WebSocket client connected");
+
+    let mut rx = state.ws_broadcast.subscribe();
+
+    loop {
+        tokio::select! {
+            // Forward broadcast messages to client
+            msg = rx.recv() => {
+                match msg {
+                    Ok(WsMessage::DataUpdated) => {
+                        if socket.send(Message::Text("reload".into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(WsMessage::Error(err)) => {
+                        let msg = format!("error:{}", err);
+                        if socket.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // Missed some messages, send a reload anyway
+                        if socket.send(Message::Text("reload".into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+            // Handle client messages (ping/pong, close)
+            result = socket.recv() => {
+                match result {
+                    Some(Ok(Message::Ping(data))) => {
+                        if socket.send(Message::Pong(data)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    log::info!("WebSocket client disconnected");
 }
 
 /// Runs the web server.
@@ -125,10 +211,12 @@ pub async fn run_server(
 
 /// GET /api/movements - List all movements with summary.
 async fn get_movements(State(state): State<Arc<AppState>>) -> Json<Vec<MovementSummary>> {
+    let data = state.data.read().await;
+
     let summaries: Vec<MovementSummary> = Movement::all()
         .iter()
         .map(|m| {
-            let analysis = state.analyses.get(m);
+            let analysis = data.analyses.get(m);
             let data_points = analysis.map(|a| &a.data_points);
 
             MovementSummary {
@@ -152,7 +240,8 @@ async fn get_movement_data(
     Path(name): Path<String>,
 ) -> Result<Json<MovementResponse>, StatusCode> {
     let movement = id_to_movement(&name).ok_or(StatusCode::NOT_FOUND)?;
-    let analysis = state.analyses.get(&movement);
+    let data = state.data.read().await;
+    let analysis = data.analyses.get(&movement);
 
     let (observations, predictions, last_date) = if let Some(a) = analysis {
         let obs: Vec<DataPointJson> = a
@@ -192,7 +281,9 @@ async fn get_movement_data(
 
 /// GET /api/composites - IPF GL and Sinclair data.
 async fn get_composites(State(state): State<Arc<AppState>>) -> Json<CompositesResponse> {
-    let ipf_gl = state.ipf_gl.as_ref().map(|c| CompositeData {
+    let data = state.data.read().await;
+
+    let ipf_gl = data.ipf_gl.as_ref().map(|c| CompositeData {
         current_value: c.current_value,
         predictions: c
             .predictions
@@ -207,7 +298,7 @@ async fn get_composites(State(state): State<Arc<AppState>>) -> Json<CompositesRe
         most_reliable_date: c.most_reliable_date.map(|d| d.to_string()),
     });
 
-    let sinclair = state.sinclair.as_ref().map(|c| CompositeData {
+    let sinclair = data.sinclair.as_ref().map(|c| CompositeData {
         current_value: c.current_value,
         predictions: c
             .predictions

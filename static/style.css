@@ -211,3 +211,70 @@ canvas {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* Connection Status Indicator */
+.connection-status {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    padding: 6px 10px;
+    border-radius: 16px;
+    z-index: 100;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.status-dot.connected {
+    background: var(--accent-secondary);
+}
+
+.status-dot.disconnected {
+    background: #f44336;
+}
+
+.status-dot.reconnecting {
+    background: #ff9800;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Toast Notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    padding: 12px 24px;
+    border-radius: 8px;
+    opacity: 0;
+    transition: transform 0.3s, opacity 0.3s;
+    z-index: 1000;
+    border: 1px solid var(--border);
+}
+
+.toast.visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+.toast.error {
+    background: #3d1212;
+    border-color: #f44336;
+}

@@ -5,14 +5,16 @@ mod excel;
 mod formulas;
 mod gp;
 mod server;
+mod watcher;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate, Utc};
 use clap::Parser;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::analysis::{
     MovementAnalysis, analyze_training_data, find_most_reliable_date_olympic,
@@ -21,7 +23,8 @@ use crate::analysis::{
 use crate::domain::Movement;
 use crate::excel::load_training_data;
 use crate::formulas::{calculate_ipf_gl, calculate_sinclair};
-use crate::server::{AppState, CompositeAnalysis, CompositePrediction};
+use crate::server::{AnalysisData, AppState, CompositeAnalysis, CompositePrediction, WsMessage};
+use crate::watcher::{WatcherConfig, watch_file};
 
 /// Strength training analytics tool for Olympic weightlifting and powerlifting.
 #[derive(Parser, Debug)]
@@ -46,10 +49,63 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Load training data
-    println!("Loading training data from: {}", args.file.display());
-    let data = load_training_data(&args.file)
-        .with_context(|| format!("Failed to load training data from {}", args.file.display()))?;
+    // Get canonical file path for watching
+    let file_path = args
+        .file
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve path: {}", args.file.display()))?;
+
+    // Load initial training data
+    println!("Loading training data from: {}", file_path.display());
+    let initial_data = load_and_analyze(&file_path)?;
+
+    // Create broadcast channel for WebSocket notifications
+    let (ws_tx, _) = broadcast::channel::<WsMessage>(16);
+
+    // Build application state
+    let state = Arc::new(AppState {
+        data: RwLock::new(initial_data),
+        file_path: file_path.clone(),
+        ws_broadcast: ws_tx,
+    });
+
+    // Determine static directory (relative to executable or cwd)
+    let static_dir = find_static_dir()?;
+    println!();
+    println!("Static files: {}", static_dir.display());
+
+    // Spawn file watcher
+    let watcher_state = state.clone();
+    let watcher_path = file_path.clone();
+    tokio::spawn(async move {
+        let config = WatcherConfig::default();
+        let retry_config = config.clone();
+
+        if let Err(e) = watch_file(&watcher_path, config, move || {
+            let state = watcher_state.clone();
+            let config = retry_config.clone();
+            tokio::spawn(async move {
+                reload_with_retry(&state, &config).await;
+            });
+        })
+        .await
+        {
+            log::error!("File watcher error: {}", e);
+        }
+    });
+
+    // Start server
+    println!();
+    println!("Live reload enabled - watching for file changes");
+    server::run_server(state, args.port, static_dir).await?;
+
+    Ok(())
+}
+
+/// Loads training data and runs analysis, returning AnalysisData.
+fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
+    let data = load_training_data(file_path)
+        .with_context(|| format!("Failed to load training data from {}", file_path.display()))?;
 
     // Print summary
     println!();
@@ -125,24 +181,54 @@ async fn main() -> Result<()> {
         println!("Sinclair: insufficient data (need snatch, C&J, bodyweight)");
     }
 
-    // Build application state
-    let state = Arc::new(AppState {
+    Ok(AnalysisData {
         training_data: data,
         analyses: analysis_results,
         ipf_gl,
         sinclair,
-    });
+        last_reload: Utc::now(),
+    })
+}
 
-    // Determine static directory (relative to executable or cwd)
-    let static_dir = find_static_dir()?;
-    println!();
-    println!("Static files: {}", static_dir.display());
+/// Reloads data with retry logic for transient failures.
+async fn reload_with_retry(state: &AppState, config: &WatcherConfig) {
+    let mut last_error = None;
 
-    // Start server
-    println!();
-    server::run_server(state, args.port, static_dir).await?;
+    for attempt in 0..config.retry_attempts {
+        match load_and_analyze(&state.file_path) {
+            Ok(new_data) => {
+                // Update state
+                let mut data = state.data.write().await;
+                *data = new_data;
+                drop(data);
 
-    Ok(())
+                log::info!("Data reloaded successfully");
+
+                // Notify WebSocket clients
+                let _ = state.ws_broadcast.send(WsMessage::DataUpdated);
+                return;
+            }
+            Err(e) => {
+                log::warn!("Reload attempt {} failed: {}", attempt + 1, e);
+                last_error = Some(e);
+                tokio::time::sleep(config.retry_delay).await;
+            }
+        }
+    }
+
+    // All retries failed
+    if let Some(e) = last_error {
+        log::error!(
+            "Failed to reload data after {} attempts: {}",
+            config.retry_attempts,
+            e
+        );
+
+        // Notify clients of error
+        let _ = state
+            .ws_broadcast
+            .send(WsMessage::Error("Failed to reload data".into()));
+    }
 }
 
 /// Finds the static directory for serving frontend files.
