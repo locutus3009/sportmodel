@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SportModel - Training Analytics</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SportModel</h1>
+            <p class="subtitle">Strength Training Analytics</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="squat">Squat</button>
+            <button class="tab" data-tab="bench">Bench</button>
+            <button class="tab" data-tab="deadlift">Deadlift</button>
+            <button class="tab" data-tab="snatch">Snatch</button>
+            <button class="tab" data-tab="cj">C&J</button>
+            <button class="tab" data-tab="ipf-gl">IPF GL</button>
+            <button class="tab" data-tab="sinclair">Sinclair</button>
+            <button class="tab" data-tab="bodyweight">Bodyweight</button>
+        </nav>
+
+        <main class="chart-container">
+            <div id="chart-wrapper">
+                <canvas id="main-chart"></canvas>
+            </div>
+            <div id="chart-info">
+                <span id="last-observation"></span>
+                <span id="current-value"></span>
+            </div>
+            <div id="no-data" class="hidden">
+                <p>No data available for this movement.</p>
+                <p class="hint">Add observations to your Excel file to see predictions.</p>
+            </div>
+        </main>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
