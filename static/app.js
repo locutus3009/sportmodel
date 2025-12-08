@@ -23,7 +23,10 @@ let predictionMonths = 12;
 const COLORS = {
     observation: '#4CAF50',
     prediction: '#2196F3',
-    ciArea: 'rgba(33, 150, 243, 0.15)',
+    // Sigma bands: innermost (1σ) is most visible, outermost (3σ) is most transparent
+    sigma1Area: 'rgba(33, 150, 243, 0.30)',  // 1σ — darkest
+    sigma2Area: 'rgba(33, 150, 243, 0.18)',  // 2σ — medium
+    sigma3Area: 'rgba(33, 150, 243, 0.08)',  // 3σ — lightest
     todayLine: 'rgba(255, 255, 255, 0.3)',
     gridLine: 'rgba(255, 255, 255, 0.1)',
     text: '#b0b0b0',
@@ -346,32 +349,77 @@ function renderChart(data, isComposite) {
         });
     }
 
-    // Predictions
+    // Predictions with three sigma bands
     if (data.predictions && data.predictions.length > 0) {
         console.log('Adding predictions:', data.predictions.length);
 
-        // CI Upper (for fill)
+        // Create sigma band datasets from outermost to innermost
+        // Each upper fills to its corresponding lower
+
+        // 3σ Upper (outermost)
         datasets.push({
-            label: '95% CI Upper',
-            data: data.predictions.map(p => ({ x: p.date, y: p.ci_upper })),
+            label: '3σ Upper',
+            data: data.predictions.map(p => ({ x: p.date, y: p.mean + 3 * p.std_dev })),
             borderColor: 'transparent',
-            backgroundColor: COLORS.ciArea,
+            backgroundColor: COLORS.sigma3Area,
             fill: '+1',
             pointRadius: 0,
-            order: 3,
+            order: 8,
         });
 
-        // CI Lower
+        // 3σ Lower
         datasets.push({
-            label: '95% CI Lower',
-            data: data.predictions.map(p => ({ x: p.date, y: p.ci_lower })),
+            label: '3σ Lower',
+            data: data.predictions.map(p => ({ x: p.date, y: p.mean - 3 * p.std_dev })),
             borderColor: 'transparent',
             fill: false,
+            pointRadius: 0,
+            order: 9,
+        });
+
+        // 2σ Upper
+        datasets.push({
+            label: '2σ Upper',
+            data: data.predictions.map(p => ({ x: p.date, y: p.mean + 2 * p.std_dev })),
+            borderColor: 'transparent',
+            backgroundColor: COLORS.sigma2Area,
+            fill: '+1',
+            pointRadius: 0,
+            order: 6,
+        });
+
+        // 2σ Lower
+        datasets.push({
+            label: '2σ Lower',
+            data: data.predictions.map(p => ({ x: p.date, y: p.mean - 2 * p.std_dev })),
+            borderColor: 'transparent',
+            fill: false,
+            pointRadius: 0,
+            order: 7,
+        });
+
+        // 1σ Upper (innermost)
+        datasets.push({
+            label: '1σ Upper',
+            data: data.predictions.map(p => ({ x: p.date, y: p.mean + p.std_dev })),
+            borderColor: 'transparent',
+            backgroundColor: COLORS.sigma1Area,
+            fill: '+1',
             pointRadius: 0,
             order: 4,
         });
 
-        // Mean prediction line
+        // 1σ Lower
+        datasets.push({
+            label: '1σ Lower',
+            data: data.predictions.map(p => ({ x: p.date, y: p.mean - p.std_dev })),
+            borderColor: 'transparent',
+            fill: false,
+            pointRadius: 0,
+            order: 5,
+        });
+
+        // Mean prediction line (on top)
         datasets.push({
             label: 'Prediction',
             data: data.predictions.map(p => ({ x: p.date, y: p.mean })),
@@ -461,8 +509,8 @@ function renderChart(data, isComposite) {
                         filter: function(tooltipItem, index, tooltipItems) {
                             const label = tooltipItem.dataset.label;
 
-                            // Exclude CI bounds
-                            if (label === '95% CI Upper' || label === '95% CI Lower') {
+                            // Exclude all sigma bands
+                            if (label.includes('σ')) {
                                 return false;
                             }
 

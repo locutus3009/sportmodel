@@ -280,18 +280,20 @@ impl GpModel {
                 let v = chol.l().solve_lower_triangular(&k_star_row);
 
                 if let Some(v) = v {
-                    // Variance = K** - v^T * v
-                    let var = k_star_star - v.dot(&v);
-                    variances.push(var.max(0.0));
+                    // Predictive variance = posterior variance + noise variance
+                    // This gives intervals where observations (not just the mean) should fall
+                    let posterior_var = k_star_star - v.dot(&v);
+                    let predictive_var = posterior_var + self.hyperparams.noise_variance;
+                    variances.push(predictive_var.max(0.0));
                 } else {
-                    // Fallback: use K** as upper bound
-                    variances.push(k_star_star);
+                    // Fallback: use K** + noise as upper bound
+                    variances.push(k_star_star + self.hyperparams.noise_variance);
                 }
             }
         } else {
-            // Fallback: return signal variance as upper bound
+            // Fallback: return signal + noise variance as upper bound
             for _ in 0..n {
-                variances.push(self.hyperparams.signal_variance);
+                variances.push(self.hyperparams.signal_variance + self.hyperparams.noise_variance);
             }
         }
 

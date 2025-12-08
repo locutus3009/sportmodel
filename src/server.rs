@@ -100,8 +100,7 @@ pub struct DataPointJson {
 pub struct PredictionJson {
     pub date: String,
     pub mean: f64,
-    pub ci_lower: f64,
-    pub ci_upper: f64,
+    pub std_dev: f64,
 }
 
 #[derive(Serialize)]
@@ -345,8 +344,7 @@ async fn get_movement_data(
         .map(|p| PredictionJson {
             date: p.date.to_string(),
             mean: p.mean,
-            ci_lower: p.ci_lower(),
-            ci_upper: p.ci_upper(),
+            std_dev: p.std_dev,
         })
         .collect();
 
@@ -386,8 +384,8 @@ async fn get_composites(
             .map(|p| PredictionJson {
                 date: p.date.to_string(),
                 mean: p.value,
-                ci_lower: p.ci_lower,
-                ci_upper: p.ci_upper,
+                // Derive std_dev from CI bounds (assuming symmetric uncertainty)
+                std_dev: (p.ci_upper - p.ci_lower) / 2.0,
             })
             .collect(),
         most_reliable_date: c.most_reliable_date.map(|d| d.to_string()),
@@ -402,8 +400,8 @@ async fn get_composites(
             .map(|p| PredictionJson {
                 date: p.date.to_string(),
                 mean: p.value,
-                ci_lower: p.ci_lower,
-                ci_upper: p.ci_upper,
+                // Derive std_dev from CI bounds (assuming symmetric uncertainty)
+                std_dev: (p.ci_upper - p.ci_lower) / 2.0,
             })
             .collect(),
         most_reliable_date: c.most_reliable_date.map(|d| d.to_string()),

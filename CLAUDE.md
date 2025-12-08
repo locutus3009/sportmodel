@@ -51,7 +51,7 @@ sportmodel/
 
 ### gp.rs
 - `GpHyperparameters`: Length scale, signal variance, noise variance
-- `GpPrediction`: Mean prediction with standard deviation and 95% CI
+- `GpPrediction`: Mean prediction with standard deviation (used for sigma bands)
 - `GpModel`: Fitted GP model with `fit()`, `predict()`, `predict_range()`
 - `GpError`: Error types for insufficient data, singular matrix, invalid params
 - Uses squared exponential (RBF) kernel with Cholesky decomposition for stability
@@ -202,7 +202,7 @@ After starting the server, open http://localhost:8080 in your browser.
 
 ### Dashboard Features
 - **8 tabs**: Squat, Bench, Deadlift, Snatch, C&J, IPF GL, Sinclair, Bodyweight
-- **Charts**: GP regression curve with 95% confidence intervals
+- **Charts**: GP regression curve with three sigma bands (1σ, 2σ, 3σ)
 - **Observations**: Green dots showing actual measurements
 - **Today line**: Dashed vertical line marking the current date
 - **Range controls**: Button groups to adjust history depth (1-5 years) and prediction length (6/12 months)
@@ -215,7 +215,7 @@ After starting the server, open http://localhost:8080 in your browser.
 Hovering on the chart shows:
 - **Prediction**: Always shows exactly one prediction value for the hovered date
 - **Observation**: Only shown if an actual measurement exists for that exact date
-- **CI bounds**: Never shown in tooltip (visual only)
+- **Sigma bands**: Never shown in tooltip (visual only)
 
 The tooltip uses `mode: 'x'` with a custom filter to deduplicate items. This is necessary because:
 - Observations are sparse (only on measurement days)
@@ -287,7 +287,7 @@ The debouncer collapses these into a single reload after activity settles.
 4. **GP Regression**: `analyze_training_data()` fits GP models per movement
 5. **Composite Indices**: IPF GL and Sinclair calculated from component predictions
 6. **Web Server**: Serves JSON API, WebSocket, and static frontend
-7. **Visualization**: Chart.js renders predictions with confidence intervals
+7. **Visualization**: Chart.js renders predictions with three sigma bands
 8. **Live Updates**: File watcher detects changes, reloads data, notifies browsers via WebSocket
 
 ## Input Format
@@ -317,6 +317,15 @@ Squared exponential (RBF): `k(x, x') = σ² × exp(-0.5 × (x - x')² / l²)`
 - Configurable via UI: 1-5 years into the past, 6 or 12 months into the future
 - Default: 2 years history, 12 months prediction
 - Daily resolution
+
+### Uncertainty Bands
+The chart displays three sigma bands (1σ, 2σ, 3σ) using **predictive variance**, not posterior variance:
+- **Posterior variance**: Uncertainty in the mean function (shrinks near data points)
+- **Predictive variance**: Posterior variance + noise variance (where observations should fall)
+
+The predictive std_dev is computed as: `sqrt(posterior_variance + noise_variance)`
+
+This ensures ~68%/95%/99.7% of observations fall within 1σ/2σ/3σ bands respectively.
 
 ## Composite Indices
 
