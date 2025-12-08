@@ -109,6 +109,17 @@ After starting the server, open http://localhost:8080 in your browser.
 - **Connection indicator**: Green dot shows live connection status
 - **Toast notifications**: Brief popup when data updates
 
+### Tooltip Behavior
+Hovering on the chart shows:
+- **Prediction**: Always shows exactly one prediction value for the hovered date
+- **Observation**: Only shown if an actual measurement exists for that exact date
+- **CI bounds**: Never shown in tooltip (visual only)
+
+The tooltip uses `mode: 'x'` with a custom filter to deduplicate items. This is necessary because:
+- Observations are sparse (only on measurement days)
+- Predictions are dense (daily for 18 months)
+- Without deduplication, nearby data points would all appear in tooltip
+
 ### API Endpoints
 
 ```bash

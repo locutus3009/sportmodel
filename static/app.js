@@ -12,6 +12,9 @@ const dataCache = {};
 // Current tab
 let currentTab = 'squat';
 
+// Current chart data for tooltip lookup
+let tooltipData = null;
+
 // Chart colors
 const COLORS = {
     observation: '#4CAF50',
@@ -270,6 +273,9 @@ function showNoData() {
 function renderChart(data, isComposite) {
     console.log('Rendering chart for:', currentTab, 'isComposite:', isComposite);
 
+    // Store for tooltip lookup
+    tooltipData = data;
+
     document.getElementById('chart-wrapper').classList.remove('hidden');
     document.getElementById('chart-info').classList.remove('hidden');
     document.getElementById('no-data').classList.add('hidden');
@@ -358,7 +364,7 @@ function renderChart(data, isComposite) {
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: {
-                    mode: 'index',
+                    mode: 'x',
                     intersect: false,
                 },
                 scales: {
@@ -403,14 +409,34 @@ function renderChart(data, isComposite) {
                         bodyColor: '#b0b0b0',
                         borderColor: '#3d3d3d',
                         borderWidth: 1,
+                        filter: function(tooltipItem, index, tooltipItems) {
+                            const label = tooltipItem.dataset.label;
+
+                            // Exclude CI bounds
+                            if (label === '95% CI Upper' || label === '95% CI Lower') {
+                                return false;
+                            }
+
+                            // Find first prediction to use as reference date
+                            const firstPred = tooltipItems.find(t => t.dataset.label === 'Prediction');
+                            const targetDate = firstPred?.raw.x;
+
+                            // For Prediction: only keep the first one
+                            if (label === 'Prediction') {
+                                return tooltipItem === firstPred;
+                            }
+
+                            // For Observations: only keep if date matches exactly
+                            if (label === 'Observations') {
+                                return targetDate && tooltipItem.raw.x === targetDate;
+                            }
+
+                            return false;
+                        },
                         callbacks: {
                             label: function(context) {
-                                if (context.dataset.label === '95% CI Upper' ||
-                                    context.dataset.label === '95% CI Lower') {
-                                    return null;
-                                }
-                                const value = context.parsed.y.toFixed(1);
-                                return `${context.dataset.label}: ${value}`;
+                                const label = context.dataset.label === 'Observations' ? 'Observation' : 'Prediction';
+                                return `${label}: ${context.parsed.y.toFixed(1)}`;
                             }
                         }
                     },
