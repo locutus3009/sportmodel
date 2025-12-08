@@ -42,21 +42,21 @@
             </div>
             <div id="chart-controls">
                 <div class="control-group">
-                    <label for="history-select">History:</label>
-                    <select id="history-select">
-                        <option value="1">1 year</option>
-                        <option value="2" selected>2 years</option>
-                        <option value="3">3 years</option>
-                        <option value="4">4 years</option>
-                        <option value="5">5 years</option>
-                    </select>
+                    <span class="control-label">History:</span>
+                    <div class="button-group" id="history-buttons">
+                        <button class="option-btn" data-value="1">1y</button>
+                        <button class="option-btn active" data-value="2">2y</button>
+                        <button class="option-btn" data-value="3">3y</button>
+                        <button class="option-btn" data-value="4">4y</button>
+                        <button class="option-btn" data-value="5">5y</button>
+                    </div>
                 </div>
                 <div class="control-group">
-                    <label for="prediction-select">Prediction:</label>
-                    <select id="prediction-select">
-                        <option value="6">6 months</option>
-                        <option value="12" selected>12 months</option>
-                    </select>
+                    <span class="control-label">Prediction:</span>
+                    <div class="button-group" id="prediction-buttons">
+                        <button class="option-btn" data-value="6">6m</button>
+                        <button class="option-btn active" data-value="12">12m</button>
+                    </div>
                 </div>
             </div>
             <div id="no-data" class="hidden">

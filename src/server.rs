@@ -359,7 +359,22 @@ async fn get_movement_data(
 }
 
 /// GET /api/composites - IPF GL and Sinclair data.
-async fn get_composites(State(state): State<Arc<AppState>>) -> Json<CompositesResponse> {
+///
+/// Query parameters:
+/// - `history_years`: 1-5 (default 2) - years of historical data to show
+/// - `prediction_months`: 6 or 12 (default 12) - months into the future to predict
+async fn get_composites(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<MovementQuery>,
+) -> Json<CompositesResponse> {
+    // Clamp parameters to valid ranges
+    let history_years = params.history_years.clamp(1, 5);
+    let prediction_months = if params.prediction_months >= 12 { 12 } else { 6 };
+
+    let today = Local::now().date_naive();
+    let history_start = today - Duration::days(i64::from(history_years) * 365);
+    let prediction_end = today + Duration::days(i64::from(prediction_months) * 30);
+
     let data = state.data.read().await;
 
     let ipf_gl = data.ipf_gl.as_ref().map(|c| CompositeData {
@@ -367,6 +382,7 @@ async fn get_composites(State(state): State<Arc<AppState>>) -> Json<CompositesRe
         predictions: c
             .predictions
             .iter()
+            .filter(|p| p.date >= history_start && p.date <= prediction_end)
             .map(|p| PredictionJson {
                 date: p.date.to_string(),
                 mean: p.value,
@@ -382,6 +398,7 @@ async fn get_composites(State(state): State<Arc<AppState>>) -> Json<CompositesRe
         predictions: c
             .predictions
             .iter()
+            .filter(|p| p.date >= history_start && p.date <= prediction_end)
             .map(|p| PredictionJson {
                 date: p.date.to_string(),
                 mean: p.value,

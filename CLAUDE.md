@@ -205,6 +205,7 @@ After starting the server, open http://localhost:8080 in your browser.
 - **Charts**: GP regression curve with 95% confidence intervals
 - **Observations**: Green dots showing actual measurements
 - **Today line**: Dashed vertical line marking the current date
+- **Range controls**: Button groups to adjust history depth (1-5 years) and prediction length (6/12 months)
 - **Dark theme**: Easy on the eyes
 - **Live reload**: Charts automatically refresh when Excel file changes
 - **Connection indicator**: Green dot shows live connection status
@@ -227,7 +228,7 @@ The tooltip uses `mode: 'x'` with a custom filter to deduplicate items. This is 
 # List all movements with summary
 curl http://localhost:8080/api/movements
 
-# Get full data for a specific movement
+# Get full data for a specific movement (default: 2 years history, 12 months prediction)
 curl http://localhost:8080/api/movement/squat
 curl http://localhost:8080/api/movement/bench
 curl http://localhost:8080/api/movement/deadlift
@@ -235,8 +236,14 @@ curl http://localhost:8080/api/movement/snatch
 curl http://localhost:8080/api/movement/cj
 curl http://localhost:8080/api/movement/bodyweight
 
+# With custom date range (history_years: 1-5, prediction_months: 6 or 12)
+curl "http://localhost:8080/api/movement/squat?history_years=3&prediction_months=6"
+
 # Get composite indices (IPF GL and Sinclair)
 curl http://localhost:8080/api/composites
+
+# With custom date range
+curl "http://localhost:8080/api/composites?history_years=1&prediction_months=6"
 
 # WebSocket endpoint for live updates
 # Connect to ws://localhost:8080/ws
@@ -307,8 +314,8 @@ Squared exponential (RBF): `k(x, x') = σ² × exp(-0.5 × (x - x')² / l²)`
 - Minimum 2 observations required per movement
 
 ### Prediction Range
-- 12 months into the past
-- 6 months into the future
+- Configurable via UI: 1-5 years into the past, 6 or 12 months into the future
+- Default: 2 years history, 12 months prediction
 - Daily resolution
 
 ## Composite Indices

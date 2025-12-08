@@ -142,9 +142,9 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
 
     let today = Local::now().date_naive();
 
-    // Set prediction range: 12 months ago to 6 months future
-    let prediction_start = today - Duration::days(365);
-    let prediction_end = today + Duration::days(180);
+    // Set prediction range: 5 years ago to 12 months future (max supported by UI)
+    let prediction_start = today - Duration::days(5 * 365);
+    let prediction_end = today + Duration::days(360);
 
     let analysis_results = analyze_training_data(&data, prediction_start, prediction_end);
 

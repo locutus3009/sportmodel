@@ -124,42 +124,53 @@ header .subtitle {
 /* Chart Controls */
 #chart-controls {
     display: flex;
-    justify-content: center;
-    gap: 24px;
-    padding: 12px 5px;
-    border-top: 1px solid var(--border);
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 15px;
     margin-top: 10px;
+    border-top: 1px solid var(--border);
 }
 
 .control-group {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 
-.control-group label {
+.control-label {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.button-group {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-secondary);
+    padding: 6px;
+    border-radius: 10px;
+}
+
+.option-btn {
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
     color: var(--text-secondary);
-    font-size: 0.85rem;
-}
-
-.control-group select {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
+    font-weight: 500;
     cursor: pointer;
-    transition: border-color 0.2s ease;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    white-space: nowrap;
 }
 
-.control-group select:hover {
-    border-color: var(--accent);
+.option-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
 }
 
-.control-group select:focus {
-    outline: none;
-    border-color: var(--accent);
+.option-btn.active {
+    background: var(--accent);
+    color: var(--text-primary);
 }
 
 /* No Data State */
@@ -230,11 +241,18 @@ canvas {
     }
 
     #chart-controls {
-        gap: 16px;
+        flex-direction: column;
+        gap: 10px;
     }
 
-    .control-group select {
-        padding: 5px 8px;
+    .option-btn {
+        padding: 8px 12px;
+        font-size: 0.8rem;
+        min-width: 40px;
+    }
+
+    .button-group {
+        padding: 4px;
     }
 }
 

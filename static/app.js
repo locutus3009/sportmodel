@@ -48,17 +48,27 @@ function init() {
 }
 
 function setupRangeControls() {
-    const historySelect = document.getElementById('history-select');
-    const predictionSelect = document.getElementById('prediction-select');
+    const historyButtons = document.getElementById('history-buttons');
+    const predictionButtons = document.getElementById('prediction-buttons');
 
-    historySelect.addEventListener('change', (e) => {
-        historyYears = parseInt(e.target.value, 10);
+    historyButtons.addEventListener('click', (e) => {
+        const btn = e.target.closest('.option-btn');
+        if (!btn || btn.classList.contains('active')) return;
+
+        historyButtons.querySelector('.active').classList.remove('active');
+        btn.classList.add('active');
+        historyYears = parseInt(btn.dataset.value, 10);
         clearCacheForCurrentTab();
         reloadCurrentTab();
     });
 
-    predictionSelect.addEventListener('change', (e) => {
-        predictionMonths = parseInt(e.target.value, 10);
+    predictionButtons.addEventListener('click', (e) => {
+        const btn = e.target.closest('.option-btn');
+        if (!btn || btn.classList.contains('active')) return;
+
+        predictionButtons.querySelector('.active').classList.remove('active');
+        btn.classList.add('active');
+        predictionMonths = parseInt(btn.dataset.value, 10);
         clearCacheForCurrentTab();
         reloadCurrentTab();
     });
@@ -67,13 +77,9 @@ function setupRangeControls() {
 function clearCacheForCurrentTab() {
     // Clear all cache entries for current tab (any params combination)
     for (const key in dataCache) {
-        if (key.startsWith(currentTab + '_')) {
+        if (key.startsWith(currentTab + '_') || key.startsWith('composites_')) {
             delete dataCache[key];
         }
-    }
-    // Also clear composites cache if viewing composite
-    if (COMPOSITES.includes(currentTab)) {
-        delete dataCache.composites;
     }
 }
 
@@ -266,20 +272,24 @@ async function loadMovementData(movementId) {
 }
 
 async function loadCompositeData(compositeId) {
-    console.log('Loading composite data for:', compositeId);
+    console.log('Loading composite data for:', compositeId, 'history:', historyYears, 'prediction:', predictionMonths);
+
+    // Build cache key including current params
+    const cacheKey = `composites_${historyYears}_${predictionMonths}`;
 
     // Check cache
-    if (!dataCache.composites) {
-        const response = await fetch('/api/composites');
+    if (!dataCache[cacheKey]) {
+        const url = `/api/composites?history_years=${historyYears}&prediction_months=${predictionMonths}`;
+        const response = await fetch(url);
         if (!response.ok) {
             console.error('API error:', response.status);
             throw new Error('API error');
         }
-        dataCache.composites = await response.json();
-        console.log('Composites data loaded:', dataCache.composites);
+        dataCache[cacheKey] = await response.json();
+        console.log('Composites data loaded:', dataCache[cacheKey]);
     }
 
-    const composites = dataCache.composites;
+    const composites = dataCache[cacheKey];
     const key = compositeId === 'ipf-gl' ? 'ipf_gl' : 'sinclair';
     const data = composites[key];
 
