@@ -190,7 +190,7 @@ async fn handle_ws_connection(mut socket: WebSocket, state: Arc<AppState>) {
     log::info!("WebSocket client disconnected");
 }
 
-/// Runs the web server.
+/// Runs the web server with graceful shutdown support.
 pub async fn run_server(
     state: Arc<AppState>,
     port: u16,
@@ -202,9 +202,41 @@ pub async fn run_server(
     println!("Server running at http://localhost:{}", port);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    log::info!("Server shut down gracefully");
     Ok(())
+}
+
+/// Wait for shutdown signal (SIGTERM or SIGINT).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            log::info!("Received SIGINT, initiating graceful shutdown...");
+        }
+        _ = terminate => {
+            log::info!("Received SIGTERM, initiating graceful shutdown...");
+        }
+    }
 }
 
 // === API Handlers ===

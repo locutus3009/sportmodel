@@ -7,6 +7,7 @@ Personal strength training analytics tool for Olympic weightlifting and powerlif
 ```
 sportmodel/
 ├── Cargo.toml
+├── sportmodel.service  # Systemd user service unit file
 ├── src/
 │   ├── main.rs         # Entry point: loads data, runs GP analysis, starts web server
 │   ├── domain.rs       # Domain types (Movement, Observation, DataPoint, TrainingData)
@@ -93,6 +94,106 @@ RUST_LOG=warn cargo run -- test_data.xlsx 8080
 
 # Generate new test data
 .venv/bin/python scripts/generate_test_data.py
+```
+
+## Running as a Systemd User Service
+
+Sportmodel can run as a systemd user daemon for automatic startup and background operation.
+
+### Installation
+
+```bash
+# Build release binary
+cargo build --release
+
+# Create systemd user directory if needed
+mkdir -p ~/.config/systemd/user
+
+# Copy the service file
+cp sportmodel.service ~/.config/systemd/user/
+
+# Edit the service file to configure paths
+# REQUIRED: Set SPORTMODEL_FILE to your Excel data file
+# OPTIONAL: Adjust WorkingDirectory and ExecStart paths
+nano ~/.config/systemd/user/sportmodel.service
+
+# Reload systemd to pick up the new service
+systemctl --user daemon-reload
+```
+
+### Configuration
+
+The service uses environment variables for configuration:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SPORTMODEL_FILE` | Yes | - | Path to Excel training data file |
+| `SPORTMODEL_PORT` | No | 8080 | Web server port |
+| `RUST_LOG` | No | - | Log level (error, warn, info, debug) |
+
+Edit `~/.config/systemd/user/sportmodel.service` to set these values. The `%h` placeholder expands to your home directory.
+
+### Service Commands
+
+```bash
+# Start the service
+systemctl --user start sportmodel
+
+# Stop the service
+systemctl --user stop sportmodel
+
+# Check status
+systemctl --user status sportmodel
+
+# Enable auto-start on login
+systemctl --user enable sportmodel
+
+# Disable auto-start
+systemctl --user disable sportmodel
+
+# View logs
+journalctl --user -u sportmodel
+
+# Follow logs in real-time
+journalctl --user -u sportmodel -f
+
+# View recent logs
+journalctl --user -u sportmodel --since "1 hour ago"
+```
+
+### Graceful Shutdown
+
+The server handles SIGTERM gracefully, allowing in-flight requests to complete before shutting down. This ensures clean stops when using `systemctl --user stop sportmodel`.
+
+### Troubleshooting Service Issues
+
+**Service fails to start:**
+```bash
+# Check logs for errors
+journalctl --user -u sportmodel -n 50
+
+# Common issues:
+# - SPORTMODEL_FILE path doesn't exist
+# - Port already in use
+# - WorkingDirectory doesn't contain 'static' folder
+```
+
+**Service starts but web interface doesn't work:**
+```bash
+# Verify the service is running
+systemctl --user status sportmodel
+
+# Check if port is listening
+ss -tlnp | grep 8080
+
+# Test API endpoint
+curl http://localhost:8080/api/movements
+```
+
+**Logs not appearing:**
+```bash
+# Ensure RUST_LOG is set in the service file
+# Add: Environment=RUST_LOG=info
 ```
 
 ## Web Interface

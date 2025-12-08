@@ -32,12 +32,14 @@ use crate::watcher::{WatcherConfig, watch_file};
 #[command(about = "Personal strength training analytics with Gaussian Process regression")]
 #[command(version)]
 struct Args {
-    /// Path to the Excel file containing training data
-    #[arg(value_name = "FILE")]
+    /// Path to the Excel file containing training data.
+    /// Can also be set via SPORTMODEL_FILE environment variable.
+    #[arg(value_name = "FILE", env = "SPORTMODEL_FILE")]
     file: PathBuf,
 
-    /// Port number for the web server
-    #[arg(value_name = "PORT")]
+    /// Port number for the web server.
+    /// Can also be set via SPORTMODEL_PORT environment variable.
+    #[arg(value_name = "PORT", env = "SPORTMODEL_PORT", default_value = "8080")]
     port: u16,
 }
 

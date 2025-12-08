@@ -1,0 +1,56 @@
+# sportmodel systemd user service
+#
+# Installation:
+#   cp sportmodel.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#
+# Configuration:
+#   Edit SPORTMODEL_FILE to point to your Excel data file
+#   Edit SPORTMODEL_PORT if you need a different port
+#   Edit WorkingDirectory to match where sportmodel is installed
+#
+# Usage:
+#   systemctl --user start sportmodel
+#   systemctl --user stop sportmodel
+#   systemctl --user status sportmodel
+#   systemctl --user enable sportmodel  # start on login
+#   journalctl --user -u sportmodel     # view logs
+
+[Unit]
+Description=Sportmodel - Strength Training Analytics
+Documentation=https://github.com/yourusername/sportmodel
+After=network.target
+
+[Service]
+Type=exec
+
+# Working directory - must contain the 'static' subdirectory
+# Change this to where sportmodel is installed
+WorkingDirectory=%h/sportmodel
+
+# Executable path - adjust to your installation location
+# %h expands to the user's home directory
+ExecStart=%h/sportmodel/target/release/sportmodel
+
+# Configuration via environment variables
+# REQUIRED: Path to your Excel training data file
+Environment=SPORTMODEL_FILE=%h/sportmodel/training_data.xlsx
+
+# OPTIONAL: Port number (default: 8080)
+Environment=SPORTMODEL_PORT=8080
+
+# OPTIONAL: Log level (error, warn, info, debug, trace)
+Environment=RUST_LOG=info
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Security hardening (optional, uncomment if desired)
+# NoNewPrivileges=true
+# ProtectSystem=strict
+# ProtectHome=read-only
+# PrivateTmp=true
+
+[Install]
+WantedBy=default.target
