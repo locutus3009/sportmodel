@@ -121,6 +121,47 @@ header .subtitle {
     font-weight: 500;
 }
 
+/* Chart Controls */
+#chart-controls {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding: 12px 5px;
+    border-top: 1px solid var(--border);
+    margin-top: 10px;
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.control-group label {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.control-group select {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.2s ease;
+}
+
+.control-group select:hover {
+    border-color: var(--accent);
+}
+
+.control-group select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 /* No Data State */
 #no-data {
     position: absolute;
@@ -186,6 +227,14 @@ canvas {
     #chart-info {
         flex-direction: column;
         gap: 5px;
+    }
+
+    #chart-controls {
+        gap: 16px;
+    }
+
+    .control-group select {
+        padding: 5px 8px;
     }
 }
 

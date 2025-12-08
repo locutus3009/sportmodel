@@ -15,6 +15,10 @@ let currentTab = 'squat';
 // Current chart data for tooltip lookup
 let tooltipData = null;
 
+// Chart range settings (defaults)
+let historyYears = 2;
+let predictionMonths = 12;
+
 // Chart colors
 const COLORS = {
     observation: '#4CAF50',
@@ -37,9 +41,40 @@ document.addEventListener('DOMContentLoaded', init);
 function init() {
     console.log('SportModel initializing...');
     setupTabs();
+    setupRangeControls();
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     connectWebSocket();
+}
+
+function setupRangeControls() {
+    const historySelect = document.getElementById('history-select');
+    const predictionSelect = document.getElementById('prediction-select');
+
+    historySelect.addEventListener('change', (e) => {
+        historyYears = parseInt(e.target.value, 10);
+        clearCacheForCurrentTab();
+        reloadCurrentTab();
+    });
+
+    predictionSelect.addEventListener('change', (e) => {
+        predictionMonths = parseInt(e.target.value, 10);
+        clearCacheForCurrentTab();
+        reloadCurrentTab();
+    });
+}
+
+function clearCacheForCurrentTab() {
+    // Clear all cache entries for current tab (any params combination)
+    for (const key in dataCache) {
+        if (key.startsWith(currentTab + '_')) {
+            delete dataCache[key];
+        }
+    }
+    // Also clear composites cache if viewing composite
+    if (COMPOSITES.includes(currentTab)) {
+        delete dataCache.composites;
+    }
 }
 
 // === WebSocket Connection ===
@@ -197,20 +232,24 @@ async function loadTabData(tabId) {
 }
 
 async function loadMovementData(movementId) {
-    console.log('Loading movement data for:', movementId);
+    console.log('Loading movement data for:', movementId, 'history:', historyYears, 'prediction:', predictionMonths);
+
+    // Build cache key including current params
+    const cacheKey = `${movementId}_${historyYears}_${predictionMonths}`;
 
     // Check cache
-    if (!dataCache[movementId]) {
-        const response = await fetch(`/api/movement/${movementId}`);
+    if (!dataCache[cacheKey]) {
+        const url = `/api/movement/${movementId}?history_years=${historyYears}&prediction_months=${predictionMonths}`;
+        const response = await fetch(url);
         if (!response.ok) {
             console.error('API error:', response.status);
             throw new Error('API error');
         }
-        dataCache[movementId] = await response.json();
-        console.log('Data loaded:', dataCache[movementId]);
+        dataCache[cacheKey] = await response.json();
+        console.log('Data loaded:', dataCache[cacheKey]);
     }
 
-    const data = dataCache[movementId];
+    const data = dataCache[cacheKey];
 
     // Check for data - handle both empty arrays and undefined
     const hasObservations = data.observations && data.observations.length > 0;
@@ -335,12 +374,12 @@ function renderChart(data, isComposite) {
         });
     }
 
-    // Calculate date bounds
+    // Calculate date bounds based on selector values
     const today = new Date();
-    const oneYearAgo = new Date(today);
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    const sixMonthsFuture = new Date(today);
-    sixMonthsFuture.setMonth(sixMonthsFuture.getMonth() + 6);
+    const historyStart = new Date(today);
+    historyStart.setFullYear(historyStart.getFullYear() - historyYears);
+    const predictionEnd = new Date(today);
+    predictionEnd.setMonth(predictionEnd.getMonth() + predictionMonths);
 
     // Y-axis label
     let yAxisLabel = isComposite ? 'Score' : 'e1RM (kg)';
@@ -376,8 +415,8 @@ function renderChart(data, isComposite) {
                                 month: 'MMM yyyy'
                             }
                         },
-                        min: oneYearAgo,
-                        max: sixMonthsFuture,
+                        min: historyStart,
+                        max: predictionEnd,
                         grid: {
                             color: COLORS.gridLine,
                         },

@@ -40,6 +40,25 @@
                 <span id="last-observation"></span>
                 <span id="current-value"></span>
             </div>
+            <div id="chart-controls">
+                <div class="control-group">
+                    <label for="history-select">History:</label>
+                    <select id="history-select">
+                        <option value="1">1 year</option>
+                        <option value="2" selected>2 years</option>
+                        <option value="3">3 years</option>
+                        <option value="4">4 years</option>
+                        <option value="5">5 years</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="prediction-select">Prediction:</label>
+                    <select id="prediction-select">
+                        <option value="6">6 months</option>
+                        <option value="12" selected>12 months</option>
+                    </select>
+                </div>
+            </div>
             <div id="no-data" class="hidden">
                 <p>No data available for this movement.</p>
                 <p class="hint">Add observations to your Excel file to see predictions.</p>

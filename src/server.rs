@@ -11,19 +11,19 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{
-        Path, State,
+        Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
 };
-use chrono::{NaiveDate, Utc};
-use serde::Serialize;
+use chrono::{Duration, Local, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast};
 use tower_http::services::ServeDir;
 
-use crate::analysis::MovementAnalysis;
+use crate::analysis::{analyze_movement, MovementAnalysis};
 use crate::domain::{Movement, TrainingData};
 
 /// Message types for WebSocket broadcast.
@@ -115,6 +115,27 @@ pub struct CompositeData {
     pub current_value: f64,
     pub predictions: Vec<PredictionJson>,
     pub most_reliable_date: Option<String>,
+}
+
+// === Query Parameters ===
+
+/// Query parameters for movement data endpoint.
+#[derive(Deserialize)]
+pub struct MovementQuery {
+    /// How many years of historical observations to include (1-5, default 1)
+    #[serde(default = "default_history_years")]
+    pub history_years: u8,
+    /// How many months into the future to predict (6 or 12, default 6)
+    #[serde(default = "default_prediction_months")]
+    pub prediction_months: u8,
+}
+
+fn default_history_years() -> u8 {
+    2
+}
+
+fn default_prediction_months() -> u8 {
+    12
 }
 
 // === Router Setup ===
@@ -267,47 +288,73 @@ async fn get_movements(State(state): State<Arc<AppState>>) -> Json<Vec<MovementS
 }
 
 /// GET /api/movement/:name - Full data for one movement.
+///
+/// Query parameters:
+/// - `history_years`: 1-5 (default 1) - years of historical data to show
+/// - `prediction_months`: 6 or 12 (default 6) - months into the future to predict
 async fn get_movement_data(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    Query(params): Query<MovementQuery>,
 ) -> Result<Json<MovementResponse>, StatusCode> {
     let movement = id_to_movement(&name).ok_or(StatusCode::NOT_FOUND)?;
+
+    // Clamp parameters to valid ranges
+    let history_years = params.history_years.clamp(1, 5);
+    let prediction_months = if params.prediction_months >= 12 { 12 } else { 6 };
+
+    let today = Local::now().date_naive();
+    let history_start = today - Duration::days(i64::from(history_years) * 365);
+    let prediction_end = today + Duration::days(i64::from(prediction_months) * 30);
+
     let data = state.data.read().await;
-    let analysis = data.analyses.get(&movement);
 
-    let (observations, predictions, last_date) = if let Some(a) = analysis {
-        let obs: Vec<DataPointJson> = a
-            .data_points
-            .iter()
-            .map(|dp| DataPointJson {
-                date: dp.date.to_string(),
-                value: dp.value,
-            })
-            .collect();
+    // Get the original data points for this movement
+    let original_points = data.training_data.get(movement).unwrap_or(&[]);
 
-        let preds: Vec<PredictionJson> = a
-            .predictions
-            .iter()
-            .map(|p| PredictionJson {
-                date: p.date.to_string(),
-                mean: p.mean,
-                ci_lower: p.ci_lower(),
-                ci_upper: p.ci_upper(),
-            })
-            .collect();
+    // Filter observations to requested history window
+    let filtered_points: Vec<_> = original_points
+        .iter()
+        .filter(|dp| dp.date >= history_start)
+        .cloned()
+        .collect();
 
-        let last = a.last_observation_date.map(|d| d.to_string());
+    // Get last observation date from filtered data
+    let last_date = filtered_points.last().map(|dp| dp.date);
 
-        (obs, preds, last)
+    // Re-run GP analysis with the filtered data and custom prediction range
+    let predictions = if filtered_points.len() >= 2 {
+        analyze_movement(movement, &filtered_points, history_start, prediction_end)
+            .map(|a| a.predictions)
+            .unwrap_or_default()
     } else {
-        (Vec::new(), Vec::new(), None)
+        Vec::new()
     };
+
+    // Convert to JSON format
+    let observations: Vec<DataPointJson> = filtered_points
+        .iter()
+        .map(|dp| DataPointJson {
+            date: dp.date.to_string(),
+            value: dp.value,
+        })
+        .collect();
+
+    let preds: Vec<PredictionJson> = predictions
+        .iter()
+        .map(|p| PredictionJson {
+            date: p.date.to_string(),
+            mean: p.mean,
+            ci_lower: p.ci_lower(),
+            ci_upper: p.ci_upper(),
+        })
+        .collect();
 
     Ok(Json(MovementResponse {
         movement: movement.display_name().to_string(),
         observations,
-        predictions,
-        last_observation_date: last_date,
+        predictions: preds,
+        last_observation_date: last_date.map(|d| d.to_string()),
     }))
 }
 
