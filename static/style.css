@@ -46,6 +46,36 @@ header .subtitle {
     margin-top: 5px;
 }
 
+/* TDEE Display */
+.tdee-display {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 15px;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.tdee-label {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.tdee-value {
+    color: var(--accent);
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.tdee-value.error {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 400;
+}
+
 /* Tabs */
 .tabs {
     display: flex;

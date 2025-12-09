@@ -22,6 +22,10 @@ def main():
     # Header row
     ws.append(["Date", "Weight", "Repetitions", "Movement"])
 
+    # Generate recent dates for TDEE calculation
+    # TDEE requires 38+ days of data (28-day window + 10-day EMA lookback)
+    today = date.today()
+
     # Sample data (intentionally out of chronological order)
     data = [
         # Bodyweight entries
@@ -65,6 +69,29 @@ def main():
         # Row with missing/invalid data (will be skipped)
         # This is represented as an empty weight cell
     ]
+
+    # Add recent bodyweight entries for TDEE calculation (45 days)
+    # Starting weight ~80kg, slight downward trend (losing ~0.5kg over 45 days)
+    random.seed(42)
+    start_weight = 80.0
+    weight_per_day = -0.5 / 45  # Slight weight loss
+
+    for i in range(45):
+        day = today - timedelta(days=44-i)
+        # Weight with some noise (±0.3kg)
+        weight = start_weight + (i * weight_per_day) + random.gauss(0, 0.15)
+        data.append((day, round(weight, 1), None, "bodyweight"))
+
+    # Add calorie entries for TDEE calculation (40 days)
+    # Average intake ~2300 kcal with variation
+    base_calories = 2300
+    for i in range(40):
+        day = today - timedelta(days=39-i)
+        # Daily calories with variation (±300 kcal)
+        calories = base_calories + random.randint(-300, 300)
+        # Skip some days randomly to test sparse data handling
+        if random.random() > 0.1:  # 90% of days have data
+            data.append((day, calories, None, "calorie"))
 
     # Shuffle to make order random
     random.seed(42)  # Reproducible shuffle

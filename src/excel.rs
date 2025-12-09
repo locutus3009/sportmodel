@@ -133,6 +133,96 @@ pub fn load_training_data<P: AsRef<Path>>(path: P) -> Result<TrainingData, Parse
     Ok(TrainingData::from_observations(observations))
 }
 
+/// Loads raw observations from an Excel file.
+///
+/// Unlike `load_training_data`, this returns raw observations without
+/// converting them to data points. Useful for calculations that need
+/// the original values (like TDEE calculation).
+///
+/// # Arguments
+/// * `path` - Path to the Excel file (.xlsx)
+///
+/// # Returns
+/// Vec of raw observations, or error if file cannot be read.
+pub fn load_observations<P: AsRef<Path>>(path: P) -> Result<Vec<Observation>, ParseError> {
+    let path = path.as_ref();
+
+    // Check if file exists
+    if !path.exists() {
+        return Err(ParseError::FileNotFound(path.display().to_string()));
+    }
+
+    // Open workbook
+    let mut workbook: Xlsx<_> = open_workbook(path)
+        .map_err(|e| ParseError::CannotRead(format!("{}: {}", path.display(), e)))?;
+
+    // Get the first worksheet
+    let sheet_names = workbook.sheet_names().to_vec();
+    let sheet_name = sheet_names
+        .first()
+        .ok_or_else(|| ParseError::InvalidFormat("workbook has no sheets".to_string()))?;
+
+    let range = workbook.worksheet_range(sheet_name).map_err(|e| {
+        ParseError::CannotRead(format!("cannot read sheet '{}': {}", sheet_name, e))
+    })?;
+
+    let mut rows = range.rows();
+
+    // Parse header row
+    let header = rows
+        .next()
+        .ok_or_else(|| ParseError::InvalidFormat("empty worksheet".to_string()))?;
+
+    let indices = ColumnIndices::from_header(header)?;
+
+    // Parse data rows
+    let mut observations = Vec::new();
+
+    for (row_idx, row) in rows.enumerate() {
+        let row_num = row_idx + 2; // +1 for 0-index, +1 for header row
+
+        // Parse date
+        let date = match parse_date(&row[indices.date], row_num) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("{}", e);
+                continue;
+            }
+        };
+
+        // Parse movement (needed early to determine if reps is required)
+        let movement = match parse_movement(&row[indices.movement], row_num) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("{}", e);
+                continue;
+            }
+        };
+
+        // Parse weight
+        let weight = match parse_weight(&row[indices.weight], row_num) {
+            Ok(w) => w,
+            Err(e) => {
+                warn!("{}", e);
+                continue;
+            }
+        };
+
+        // Parse repetitions (optional for bodyweight/calorie)
+        let reps = match parse_reps(&row[indices.reps], row_num, movement) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("{}", e);
+                continue;
+            }
+        };
+
+        observations.push(Observation::new(date, weight, reps, movement));
+    }
+
+    Ok(observations)
+}
+
 /// Parses a date from a cell.
 fn parse_date(cell: &Data, row: usize) -> Result<NaiveDate, ParseError> {
     match cell {
@@ -211,10 +301,10 @@ fn parse_weight(cell: &Data, row: usize) -> Result<f64, ParseError> {
 }
 
 /// Parses repetitions from a cell.
-/// Returns None for bodyweight movements.
+/// Returns None for bodyweight and calorie movements.
 fn parse_reps(cell: &Data, row: usize, movement: Movement) -> Result<Option<u32>, ParseError> {
-    // Bodyweight doesn't need reps
-    if movement == Movement::Bodyweight {
+    // Bodyweight and Calorie don't need reps
+    if movement == Movement::Bodyweight || movement == Movement::Calorie {
         return Ok(None);
     }
 

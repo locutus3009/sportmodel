@@ -48,6 +48,7 @@ function init() {
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     connectWebSocket();
+    loadTdee();
 }
 
 function setupRangeControls() {
@@ -108,6 +109,7 @@ function connectWebSocket() {
             showNotification('Data updated');
             clearCache();
             reloadCurrentTab();
+            loadTdee();
         } else if (event.data.startsWith('error:')) {
             const errorMsg = event.data.substring(6);
             showNotification('Error: ' + errorMsg, true);
@@ -614,4 +616,42 @@ function formatDate(dateStr) {
         month: 'short',
         day: 'numeric'
     });
+}
+
+// === TDEE Display ===
+
+async function loadTdee() {
+    const valueEl = document.getElementById('tdee-value');
+    if (!valueEl) return;
+
+    try {
+        const response = await fetch('/api/tdee');
+        if (!response.ok) {
+            throw new Error('API error');
+        }
+
+        const data = await response.json();
+        console.log('TDEE data:', data);
+
+        if (data.tdee !== undefined) {
+            // Success response
+            valueEl.textContent = `${Math.round(data.tdee)} kcal`;
+            valueEl.classList.remove('error');
+            valueEl.title = `Avg intake: ${Math.round(data.avg_calories)} kcal | Weight change: ${data.weight_change_kg.toFixed(2)} kg | Pairs: ${data.pairs_used}`;
+        } else if (data.error) {
+            // Error response
+            valueEl.textContent = data.message;
+            valueEl.classList.add('error');
+            valueEl.title = '';
+        } else {
+            valueEl.textContent = '--';
+            valueEl.classList.add('error');
+            valueEl.title = '';
+        }
+    } catch (err) {
+        console.error('Failed to load TDEE:', err);
+        valueEl.textContent = '--';
+        valueEl.classList.add('error');
+        valueEl.title = '';
+    }
 }

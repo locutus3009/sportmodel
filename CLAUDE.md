@@ -17,6 +17,7 @@ sportmodel/
 │   ├── gp.rs           # Gaussian Process regression implementation
 │   ├── analysis.rs     # Analysis orchestration and higher-level functions
 │   ├── server.rs       # Web server (axum) with REST API, WebSocket, and static serving
+│   ├── tdee.rs         # TDEE calculation from calorie and weight data
 │   └── watcher.rs      # File watching with debouncing for live reload
 ├── static/
 │   ├── index.html      # Dashboard HTML with tab navigation
@@ -30,7 +31,7 @@ sportmodel/
 ## Module Responsibilities
 
 ### domain.rs
-- `Movement` enum: Bodyweight, Squat, Bench, Deadlift, Snatch, CleanAndJerk
+- `Movement` enum: Bodyweight, Squat, Bench, Deadlift, Snatch, CleanAndJerk, Calorie
 - `Observation`: Raw data from Excel (date, weight, reps, movement)
 - `DataPoint`: Processed data ready for GP regression (date, value)
 - `TrainingData`: Container organizing data by movement, sorted by date
@@ -41,6 +42,7 @@ sportmodel/
 
 ### excel.rs
 - `load_training_data`: Main entry point for Excel parsing
+- `load_observations`: Returns raw observations without conversion (used by TDEE)
 - Handles Excel dates, validates columns, skips invalid rows with warnings
 - Converts observations to e1RM values during loading
 
@@ -63,13 +65,22 @@ sportmodel/
 - `find_most_reliable_date_*`: Staleness calculation for composite indices
 
 ### server.rs
-- `AnalysisData`: Mutable data container (training data, analyses, composites)
+- `AnalysisData`: Mutable data container (training data, analyses, composites, TDEE)
 - `AppState`: Shared state with `RwLock<AnalysisData>`, file path, and WebSocket broadcast
 - `WsMessage`: WebSocket message types (`DataUpdated`, `Error`)
 - `create_router()`: Configures axum routes, WebSocket endpoint, and static file serving
 - `run_server()`: Starts the HTTP server
 - `ws_handler()`: WebSocket upgrade handler for live updates
-- REST API handlers for movements and composite indices
+- REST API handlers for movements, composite indices, and TDEE
+
+### tdee.rs
+- `TdeeResult`: Calculated TDEE with avg calories, EMA values, weight change, pairs count
+- `TdeeError`: Detailed error types (insufficient data, span too short, etc.)
+- `calculate_tdee()`: Main entry point for TDEE calculation
+- Uses 28-day window with 10-day EMA smoothing for weight trends
+- EMA boundary handling: initializes from first available weight in window, carries forward on gaps
+- Requires minimum 3 data points in each 10-day EMA window
+- Requires at least 50% valid calorie-weight pairs (14/28 days)
 
 ### watcher.rs
 - `WatcherConfig`: Configuration (debounce duration, retry attempts, retry delay)
@@ -202,12 +213,13 @@ After starting the server, open http://localhost:8080 in your browser.
 
 ### Dashboard Features
 - **8 tabs**: Squat, Bench, Deadlift, Snatch, C&J, IPF GL, Sinclair, Bodyweight
+- **TDEE display**: Header shows calculated TDEE (hover for details)
 - **Charts**: GP regression curve with three sigma bands (1σ, 2σ, 3σ)
 - **Observations**: Green dots showing actual measurements
 - **Today line**: Dashed vertical line marking the current date
 - **Range controls**: Button groups to adjust history depth (1-5 years) and prediction length (6/12 months)
 - **Dark theme**: Easy on the eyes
-- **Live reload**: Charts automatically refresh when Excel file changes
+- **Live reload**: Charts and TDEE automatically refresh when Excel file changes
 - **Connection indicator**: Green dot shows live connection status
 - **Toast notifications**: Brief popup when data updates
 
@@ -244,6 +256,11 @@ curl http://localhost:8080/api/composites
 
 # With custom date range
 curl "http://localhost:8080/api/composites?history_years=1&prediction_months=6"
+
+# Get TDEE (Total Daily Energy Expenditure)
+curl http://localhost:8080/api/tdee
+# Success: {"tdee":2391.0,"avg_calories":2316.2,"ema_start":79.9,"ema_end":79.6,"weight_change_kg":-0.27,"pairs_used":28}
+# Error: {"error":"insufficient_calorie_data","message":"Need 14 calorie entries, found 5"}
 
 # WebSocket endpoint for live updates
 # Connect to ws://localhost:8080/ws
@@ -294,9 +311,9 @@ The debouncer collapses these into a single reload after activity settles.
 
 Excel file (.xlsx) with columns:
 - **Date**: Excel date or ISO format string
-- **Weight**: Numeric weight in kg
-- **Repetitions**: Integer (empty defaults to 1 for lifts, ignored for bodyweight)
-- **Movement**: One of: bodyweight, squat, bench, deadlift, snatch, cj
+- **Weight**: Numeric weight in kg (or calories for calorie entries)
+- **Repetitions**: Integer (empty defaults to 1 for lifts, ignored for bodyweight/calorie)
+- **Movement**: One of: bodyweight, squat, bench, deadlift, snatch, cj, calorie
 
 ## GP Regression
 
@@ -341,6 +358,46 @@ This ensures ~68%/95%/99.7% of observations fall within 1σ/2σ/3σ bands respec
 
 ### Uncertainty Propagation
 Composite index uncertainty uses the maximum relative uncertainty from component lifts.
+
+## TDEE Calculation
+
+TDEE (Total Daily Energy Expenditure) is calculated empirically from calorie intake and weight data.
+
+### Algorithm
+1. **EMA Smoothing**: 10-day exponential moving average (α=0.1) for weight trends
+2. **Comparison Window**: 28-day period comparing EMA_start and EMA_end
+3. **Formula**: `TDEE = Avg_Calories - (weight_change_kg / 28) × 7700`
+
+### EMA Boundary Handling
+The 10-day EMA window may not have data on every day:
+- Window covers `[target_date - 9, target_date]` inclusive
+- EMA initializes with first available weight (not necessarily day 1)
+- If a day has no data, EMA carries forward unchanged
+- Minimum 3 data points required in each 10-day window
+
+### Data Requirements
+| Requirement | Value | Description |
+|-------------|-------|-------------|
+| Data span | 38+ days | 28-day window + 10-day EMA lookback |
+| Pair ratio | ≥50% | At least 14 valid calorie-weight pairs in 28 days |
+| EMA points | ≥3 | Minimum weights in each 10-day EMA window |
+
+### Constants
+| Constant | Value | Description |
+|----------|-------|-------------|
+| TDEE_WINDOW_DAYS | 28 | Main comparison window |
+| EMA_WINDOW_DAYS | 10 | Days for each EMA calculation |
+| EMA_ALPHA | 0.1 | EMA smoothing factor |
+| KCAL_PER_KG_FAT | 7700 | Energy density of body fat |
+| MIN_PAIR_RATIO | 0.5 | Minimum fraction of valid pairs |
+| MIN_EMA_DATA_POINTS | 3 | Minimum weights in EMA window |
+
+### Error Types
+- `insufficient_calorie_data`: Not enough calorie entries
+- `insufficient_weight_data_ema_start`: Not enough weights in start EMA window
+- `insufficient_weight_data_ema_end`: Not enough weights in end EMA window
+- `insufficient_pairs`: Not enough valid calorie-weight pairs
+- `data_span_too_short`: Data doesn't cover required 38-day span
 
 ## Troubleshooting
 

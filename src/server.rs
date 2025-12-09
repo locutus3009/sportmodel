@@ -23,8 +23,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast};
 use tower_http::services::ServeDir;
 
-use crate::analysis::{analyze_movement, MovementAnalysis};
+use crate::analysis::{MovementAnalysis, analyze_movement};
 use crate::domain::{Movement, TrainingData};
+use crate::tdee::{TdeeError, TdeeResult};
 
 /// Message types for WebSocket broadcast.
 #[derive(Clone, Debug)]
@@ -42,6 +43,7 @@ pub struct AnalysisData {
     pub analyses: HashMap<Movement, MovementAnalysis>,
     pub ipf_gl: Option<CompositeAnalysis>,
     pub sinclair: Option<CompositeAnalysis>,
+    pub tdee: Result<TdeeResult, TdeeError>,
     #[allow(dead_code)] // May be used for future features
     pub last_reload: chrono::DateTime<Utc>,
 }
@@ -116,6 +118,23 @@ pub struct CompositeData {
     pub most_reliable_date: Option<String>,
 }
 
+/// Response type for TDEE endpoint.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum TdeeResponse {
+    /// Successful TDEE calculation.
+    Success {
+        tdee: f64,
+        avg_calories: f64,
+        ema_start: f64,
+        ema_end: f64,
+        weight_change_kg: f64,
+        pairs_used: usize,
+    },
+    /// Error response with details.
+    Error { error: String, message: String },
+}
+
 // === Query Parameters ===
 
 /// Query parameters for movement data endpoint.
@@ -145,6 +164,7 @@ pub fn create_router(state: Arc<AppState>, static_dir: PathBuf) -> Router {
         .route("/api/movements", get(get_movements))
         .route("/api/movement/{name}", get(get_movement_data))
         .route("/api/composites", get(get_composites))
+        .route("/api/tdee", get(get_tdee))
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .with_state(state)
@@ -300,7 +320,11 @@ async fn get_movement_data(
 
     // Clamp parameters to valid ranges
     let history_years = params.history_years.clamp(1, 5);
-    let prediction_months = if params.prediction_months >= 12 { 12 } else { 6 };
+    let prediction_months = if params.prediction_months >= 12 {
+        12
+    } else {
+        6
+    };
 
     let today = Local::now().date_naive();
     let history_start = today - Duration::days(i64::from(history_years) * 365);
@@ -367,7 +391,11 @@ async fn get_composites(
 ) -> Json<CompositesResponse> {
     // Clamp parameters to valid ranges
     let history_years = params.history_years.clamp(1, 5);
-    let prediction_months = if params.prediction_months >= 12 { 12 } else { 6 };
+    let prediction_months = if params.prediction_months >= 12 {
+        12
+    } else {
+        6
+    };
 
     let today = Local::now().date_naive();
     let history_start = today - Duration::days(i64::from(history_years) * 365);
@@ -410,6 +438,82 @@ async fn get_composites(
     Json(CompositesResponse { ipf_gl, sinclair })
 }
 
+/// GET /api/tdee - TDEE (Total Daily Energy Expenditure) calculation.
+///
+/// Returns the calculated TDEE from calorie intake and weight data,
+/// or an error with details if insufficient data is available.
+async fn get_tdee(State(state): State<Arc<AppState>>) -> Json<TdeeResponse> {
+    let data = state.data.read().await;
+
+    let response = match &data.tdee {
+        Ok(result) => TdeeResponse::Success {
+            tdee: result.tdee,
+            avg_calories: result.avg_calories,
+            ema_start: result.ema_start,
+            ema_end: result.ema_end,
+            weight_change_kg: result.weight_change_kg,
+            pairs_used: result.pairs_used,
+        },
+        Err(err) => {
+            let (error_type, message) = match err {
+                crate::tdee::TdeeError::InsufficientCalorieData {
+                    available,
+                    required,
+                } => (
+                    "insufficient_calorie_data",
+                    format!("Need {} calorie entries, found {}", required, available),
+                ),
+                crate::tdee::TdeeError::InsufficientWeightDataForEmaStart {
+                    available,
+                    required,
+                } => (
+                    "insufficient_weight_data_ema_start",
+                    format!(
+                        "Need {} weights in EMA start window, found {}",
+                        required, available
+                    ),
+                ),
+                crate::tdee::TdeeError::InsufficientWeightDataForEmaEnd {
+                    available,
+                    required,
+                } => (
+                    "insufficient_weight_data_ema_end",
+                    format!(
+                        "Need {} weights in EMA end window, found {}",
+                        required, available
+                    ),
+                ),
+                crate::tdee::TdeeError::InsufficientPairs {
+                    available,
+                    required,
+                } => (
+                    "insufficient_pairs",
+                    format!(
+                        "Need {} calorie-weight pairs, found {}",
+                        required, available
+                    ),
+                ),
+                crate::tdee::TdeeError::DataSpanTooShort {
+                    available_days,
+                    required_days,
+                } => (
+                    "data_span_too_short",
+                    format!(
+                        "Data span {} days is less than required {} days",
+                        available_days, required_days
+                    ),
+                ),
+            };
+            TdeeResponse::Error {
+                error: error_type.to_string(),
+                message,
+            }
+        }
+    };
+
+    Json(response)
+}
+
 // === Helper Functions ===
 
 fn movement_to_id(movement: Movement) -> String {
@@ -420,6 +524,7 @@ fn movement_to_id(movement: Movement) -> String {
         Movement::Deadlift => "deadlift".to_string(),
         Movement::Snatch => "snatch".to_string(),
         Movement::CleanAndJerk => "cj".to_string(),
+        Movement::Calorie => "calorie".to_string(),
     }
 }
 
@@ -431,6 +536,7 @@ fn id_to_movement(id: &str) -> Option<Movement> {
         "deadlift" => Some(Movement::Deadlift),
         "snatch" => Some(Movement::Snatch),
         "cj" | "cleanandjerk" => Some(Movement::CleanAndJerk),
+        "calorie" => Some(Movement::Calorie),
         _ => None,
     }
 }

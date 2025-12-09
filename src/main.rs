@@ -5,6 +5,7 @@ mod excel;
 mod formulas;
 mod gp;
 mod server;
+mod tdee;
 mod watcher;
 
 use std::collections::HashMap;
@@ -21,9 +22,10 @@ use crate::analysis::{
     find_most_reliable_date_powerlifting,
 };
 use crate::domain::Movement;
-use crate::excel::load_training_data;
+use crate::excel::{load_observations, load_training_data};
 use crate::formulas::{calculate_ipf_gl, calculate_sinclair};
 use crate::server::{AnalysisData, AppState, CompositeAnalysis, CompositePrediction, WsMessage};
+use crate::tdee::calculate_tdee;
 use crate::watcher::{WatcherConfig, watch_file};
 
 /// Strength training analytics tool for Olympic weightlifting and powerlifting.
@@ -183,11 +185,44 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
         println!("Sinclair: insufficient data (need snatch, C&J, bodyweight)");
     }
 
+    // Calculate TDEE from calorie and weight observations
+    println!();
+    println!("=== Calculating TDEE ===");
+
+    let observations = load_observations(file_path)
+        .with_context(|| format!("Failed to load observations from {}", file_path.display()))?;
+
+    let calorie_obs: Vec<_> = observations
+        .iter()
+        .filter(|o| o.movement == Movement::Calorie)
+        .cloned()
+        .collect();
+    let weight_obs: Vec<_> = observations
+        .iter()
+        .filter(|o| o.movement == Movement::Bodyweight)
+        .cloned()
+        .collect();
+
+    let tdee = calculate_tdee(&calorie_obs, &weight_obs);
+
+    match &tdee {
+        Ok(result) => {
+            println!(
+                "TDEE: {:.0} kcal (from {} pairs, weight change: {:.2} kg)",
+                result.tdee, result.pairs_used, result.weight_change_kg
+            );
+        }
+        Err(e) => {
+            println!("TDEE: {}", e);
+        }
+    }
+
     Ok(AnalysisData {
         training_data: data,
         analyses: analysis_results,
         ipf_gl,
         sinclair,
+        tdee,
         last_reload: Utc::now(),
     })
 }
