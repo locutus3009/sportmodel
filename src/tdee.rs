@@ -36,6 +36,8 @@ pub const MIN_EMA_DATA_POINTS: usize = 3;
 /// TDEE calculation result.
 #[derive(Debug, Clone, Serialize)]
 pub struct TdeeResult {
+    /// Calculated EMA TDEE in kcal.
+    pub average_tdee: f64,
     /// Calculated TDEE in kcal.
     pub tdee: f64,
     /// Average daily calorie intake over the 28-day window.
@@ -142,49 +144,11 @@ struct EmaResult {
 
 // === Main Calculation Functions ===
 
-/// Calculates TDEE from calorie and weight observations.
-///
-/// Uses a 28-day window ending today, with 10-day EMA smoothing for weight.
-/// Requires at least 50% of days to have valid calorie-weight pairs.
-///
-/// # Arguments
-/// * `calorie_data` - Calorie observations (daily calorie intake)
-/// * `weight_data` - Bodyweight observations (morning weight measurements)
-///
-/// # Returns
-/// `Ok(TdeeResult)` with calculated TDEE, or `Err(TdeeError)` with reason for failure.
-pub fn calculate_tdee(
-    calorie_data: &[Observation],
-    weight_data: &[Observation],
+fn calculate_tdee_for_date(
+    today: NaiveDate,
+    weights: &BTreeMap<NaiveDate, f64>,
+    calories: &BTreeMap<NaiveDate, f64>,
 ) -> Result<TdeeResult, TdeeError> {
-    let today = Local::now().date_naive();
-
-    // Required days: 28 (main window) + 10 (EMA lookback for start) = 38 minimum
-    let required_days = TDEE_WINDOW_DAYS + EMA_WINDOW_DAYS;
-
-    // Build weight lookup map
-    let weights = build_weight_map(weight_data);
-
-    // Check if we have enough data span
-    if let (Some(&min_date), Some(&max_date)) = (weights.keys().next(), weights.keys().next_back())
-    {
-        let span_days = (max_date - min_date).num_days();
-        if span_days < required_days {
-            return Err(TdeeError::DataSpanTooShort {
-                available_days: span_days,
-                required_days,
-            });
-        }
-    } else {
-        return Err(TdeeError::InsufficientWeightDataForEmaStart {
-            available: 0,
-            required: MIN_EMA_DATA_POINTS,
-        });
-    }
-
-    // Build calorie lookup map
-    let calories = build_calorie_map(calorie_data);
-
     // Check minimum calorie data
     let min_required_pairs = (TDEE_WINDOW_DAYS as f64 * MIN_PAIR_RATIO).ceil() as usize;
     if calories.len() < min_required_pairs {
@@ -196,18 +160,18 @@ pub fn calculate_tdee(
 
     // Calculate EMA for end date (today)
     let ema_end_date = today;
-    let ema_end_result = calculate_ema_for_date(&weights, ema_end_date).ok_or(
+    let ema_end_result = calculate_ema_for_date(weights, ema_end_date).ok_or(
         TdeeError::InsufficientWeightDataForEmaEnd {
-            available: count_weights_in_window(&weights, ema_end_date),
+            available: count_weights_in_window(weights, ema_end_date),
             required: MIN_EMA_DATA_POINTS,
         },
     )?;
 
     // Calculate EMA for start date (28 days ago)
     let ema_start_date = today - Duration::days(TDEE_WINDOW_DAYS);
-    let ema_start_result = calculate_ema_for_date(&weights, ema_start_date).ok_or(
+    let ema_start_result = calculate_ema_for_date(weights, ema_start_date).ok_or(
         TdeeError::InsufficientWeightDataForEmaStart {
-            available: count_weights_in_window(&weights, ema_start_date),
+            available: count_weights_in_window(weights, ema_start_date),
             required: MIN_EMA_DATA_POINTS,
         },
     )?;
@@ -247,6 +211,7 @@ pub fn calculate_tdee(
     let tdee = avg_calories - (daily_weight_change * KCAL_PER_KG_FAT);
 
     Ok(TdeeResult {
+        average_tdee: 0.0,
         tdee,
         avg_calories,
         ema_start: ema_start_result.value,
@@ -254,6 +219,81 @@ pub fn calculate_tdee(
         weight_change_kg,
         pairs_used: valid_pairs.len(),
     })
+}
+
+/// Calculates TDEE from calorie and weight observations.
+///
+/// Uses a 28-day window ending today, with 10-day EMA smoothing for weight.
+/// Requires at least 50% of days to have valid calorie-weight pairs.
+///
+/// # Arguments
+/// * `calorie_data` - Calorie observations (daily calorie intake)
+/// * `weight_data` - Bodyweight observations (morning weight measurements)
+///
+/// # Returns
+/// `Ok(TdeeResult)` with calculated TDEE, or `Err(TdeeError)` with reason for failure.
+pub fn calculate_tdee(
+    calorie_data: &[Observation],
+    weight_data: &[Observation],
+) -> Result<TdeeResult, TdeeError> {
+    let today = Local::now().date_naive();
+
+    // Required days: 28 (main window) + 10 (EMA lookback for start) = 38 minimum
+    let required_days = TDEE_WINDOW_DAYS + EMA_WINDOW_DAYS + EMA_WINDOW_DAYS;
+
+    // Build weight lookup map
+    let weights = build_weight_map(weight_data);
+
+    // Check if we have enough data span
+    if let (Some(&min_date), Some(&max_date)) = (weights.keys().next(), weights.keys().next_back())
+    {
+        let span_days = (max_date - min_date).num_days();
+        if span_days < required_days {
+            return Err(TdeeError::DataSpanTooShort {
+                available_days: span_days,
+                required_days,
+            });
+        }
+    } else {
+        return Err(TdeeError::InsufficientWeightDataForEmaStart {
+            available: 0,
+            required: MIN_EMA_DATA_POINTS,
+        });
+    }
+
+    // Build calorie lookup map
+    let calories = build_calorie_map(calorie_data);
+
+    // Check minimum calorie data
+    let min_required_pairs = (TDEE_WINDOW_DAYS as f64 * MIN_PAIR_RATIO).ceil() as usize;
+    if calories.len() < min_required_pairs {
+        return Err(TdeeError::InsufficientCalorieData {
+            available: calories.len(),
+            required: min_required_pairs,
+        });
+    }
+
+    let tdees = {
+        let mut tmp = BTreeMap::new();
+        for i in 0..EMA_WINDOW_DAYS {
+            tmp.insert(
+                today - Duration::days(i),
+                calculate_tdee_for_date(today - Duration::days(i), &weights, &calories)?.tdee,
+            );
+        }
+        tmp
+    };
+
+    let tdee_averaged = calculate_ema_for_date(&tdees, today).ok_or(
+        TdeeError::InsufficientWeightDataForEmaEnd {
+            available: count_weights_in_window(&tdees, today),
+            required: MIN_EMA_DATA_POINTS,
+        },
+    )?;
+
+    let mut result = calculate_tdee_for_date(today, &weights, &calories)?;
+    result.average_tdee = tdee_averaged.value;
+    Ok(result)
 }
 
 // === Helper Functions ===
@@ -471,15 +511,17 @@ mod tests {
     fn test_tdee_maintenance() {
         // Test with maintenance calories (no weight change expected)
         let today = Local::now().date_naive();
+        const N1: i64 = 55;
+        const N2: i64 = 45;
 
         // Create 45 days of weight data (constant 80kg)
-        let weight_data: Vec<Observation> = (0..45)
-            .map(|i| weight_obs(today - Duration::days(44 - i), 80.0))
+        let weight_data: Vec<Observation> = (0..N1)
+            .map(|i| weight_obs(today - Duration::days(N1 - 1 - i), 80.0))
             .collect();
 
         // Create 35 days of calorie data (constant 2500 kcal)
-        let calorie_data: Vec<Observation> = (0..35)
-            .map(|i| calorie_obs(today - Duration::days(34 - i), 2500.0))
+        let calorie_data: Vec<Observation> = (0..N2)
+            .map(|i| calorie_obs(today - Duration::days(N2 - 1 - i), 2500.0))
             .collect();
 
         let result = calculate_tdee(&calorie_data, &weight_data);
@@ -497,11 +539,13 @@ mod tests {
     fn test_tdee_deficit() {
         // Test with caloric deficit (weight loss expected)
         let today = Local::now().date_naive();
+        const N1: usize = 55;
+        const N2: i64 = 45;
 
         // Create 45 days of weight data (decreasing from 81 to 80 over 28 days)
-        let weight_data: Vec<Observation> = (0..45)
+        let weight_data: Vec<Observation> = (0..N1)
             .map(|i| {
-                let days_from_end = 44 - i;
+                let days_from_end = N1 - 1 - i;
                 let weight = if days_from_end < 28 {
                     80.0 + (1.0 - (28 - days_from_end) as f64 / 28.0)
                 } else {
@@ -512,8 +556,8 @@ mod tests {
             .collect();
 
         // Create 35 days of calorie data (constant 2000 kcal - in deficit)
-        let calorie_data: Vec<Observation> = (0..35)
-            .map(|i| calorie_obs(today - Duration::days(34 - i), 2000.0))
+        let calorie_data: Vec<Observation> = (0..N2)
+            .map(|i| calorie_obs(today - Duration::days(N2 - 1 - i), 2000.0))
             .collect();
 
         let result = calculate_tdee(&calorie_data, &weight_data);
@@ -532,7 +576,7 @@ mod tests {
         let today = Local::now().date_naive();
 
         // Create 45 days of weight data
-        let weight_data: Vec<Observation> = (0..45)
+        let weight_data: Vec<Observation> = (0..55)
             .map(|i| weight_obs(today - Duration::days(44 - i), 80.0))
             .collect();
 

@@ -124,6 +124,7 @@ pub struct CompositeData {
 pub enum TdeeResponse {
     /// Successful TDEE calculation.
     Success {
+        average_tdee: f64,
         tdee: f64,
         avg_calories: f64,
         ema_start: f64,
@@ -447,6 +448,7 @@ async fn get_tdee(State(state): State<Arc<AppState>>) -> Json<TdeeResponse> {
 
     let response = match &data.tdee {
         Ok(result) => TdeeResponse::Success {
+            average_tdee: result.average_tdee,
             tdee: result.tdee,
             avg_calories: result.avg_calories,
             ema_start: result.ema_start,

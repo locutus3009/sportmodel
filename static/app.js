@@ -633,11 +633,11 @@ async function loadTdee() {
         const data = await response.json();
         console.log('TDEE data:', data);
 
-        if (data.tdee !== undefined) {
+        if (data.average_tdee !== undefined) {
             // Success response
-            valueEl.textContent = `${Math.round(data.tdee)} kcal`;
+            valueEl.textContent = `${Math.round(data.average_tdee)} kcal`;
             valueEl.classList.remove('error');
-            valueEl.title = `Avg intake: ${Math.round(data.avg_calories)} kcal | Weight change: ${data.weight_change_kg.toFixed(2)} kg | Pairs: ${data.pairs_used}`;
+            valueEl.title = `Today TDEE: ${Math.round(data.tdee)} | Avg intake: ${Math.round(data.avg_calories)} kcal | Weight change: ${data.weight_change_kg.toFixed(2)} kg | Pairs: ${data.pairs_used}`;
         } else if (data.error) {
             // Error response
             valueEl.textContent = data.message;
