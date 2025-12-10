@@ -29,6 +29,7 @@ impl Movement {
             Movement::Deadlift,
             Movement::Snatch,
             Movement::CleanAndJerk,
+            Movement::Calorie,
         ]
     }
 
