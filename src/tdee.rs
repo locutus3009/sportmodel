@@ -327,7 +327,7 @@ fn count_weights_in_window(weights: &BTreeMap<NaiveDate, f64>, target_date: Naiv
 /// Calculates EMA for a target date using the 10-day window.
 ///
 /// The window covers `[target_date - 9, target_date]` inclusive.
-/// EMA is initialized with the first available weight in the window,
+/// EMA is initialized with the last available weight in the window,
 /// then updated for each subsequent day (carrying forward on gaps).
 ///
 /// # Returns
@@ -350,14 +350,15 @@ fn calculate_ema_for_date(
         return None;
     }
 
-    // Initialize EMA with first available weight (not necessarily day 1 of window)
-    let (first_date, first_weight) = window_weights[0];
-    let mut ema = first_weight;
+    // Initialize EMA with last available weight (not necessarily target day of window)
+    let (first_date, _) = window_weights[0];
+    let (last_date, last_weight) = *window_weights.last().unwrap();
+    let mut ema = last_weight;
 
-    // Process remaining days from first_date to target_date
-    let days_to_process = (target_date - first_date).num_days();
+    // Process remaining days from last_date (can be lower than target_date) to first_date
+    let days_to_process = (last_date - first_date).num_days();
     for day_offset in 1..=days_to_process {
-        let current_date = first_date + Duration::days(day_offset);
+        let current_date = last_date - Duration::days(day_offset);
 
         if let Some(&weight) = weights.get(&current_date) {
             // Data exists: update EMA
