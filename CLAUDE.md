@@ -74,11 +74,13 @@ sportmodel/
 - REST API handlers for movements, composite indices, and TDEE
 
 ### tdee.rs
-- `TdeeResult`: Calculated TDEE with avg calories, EMA values, weight change, pairs count
+- `TdeeResult`: Calculated TDEE with smoothed average, today's TDEE, EMA values, weight change, pairs count
 - `TdeeError`: Detailed error types (insufficient data, span too short, etc.)
 - `calculate_tdee()`: Main entry point for TDEE calculation
+- `calculate_tdee_for_date()`: Internal helper for single-date TDEE calculation
 - Uses 28-day window with 10-day EMA smoothing for weight trends
-- EMA boundary handling: initializes from first available weight in window, carries forward on gaps
+- TDEE smoothing: calculates TDEE for last 10 days, applies EMA to produce smoothed result
+- EMA boundary handling: initializes from last available weight in window, processes backwards
 - Requires minimum 3 data points in each 10-day EMA window
 - Requires at least 50% valid calorie-weight pairs (14/28 days)
 
@@ -213,7 +215,7 @@ After starting the server, open http://localhost:8080 in your browser.
 
 ### Dashboard Features
 - **8 tabs**: Squat, Bench, Deadlift, Snatch, C&J, IPF GL, Sinclair, Bodyweight
-- **TDEE display**: Header shows calculated TDEE (hover for details)
+- **TDEE display**: Header shows smoothed TDEE (hover for today's raw TDEE and details)
 - **Charts**: GP regression curve with three sigma bands (1σ, 2σ, 3σ)
 - **Observations**: Green dots showing actual measurements
 - **Today line**: Dashed vertical line marking the current date
@@ -259,7 +261,7 @@ curl "http://localhost:8080/api/composites?history_years=1&prediction_months=6"
 
 # Get TDEE (Total Daily Energy Expenditure)
 curl http://localhost:8080/api/tdee
-# Success: {"tdee":2391.0,"avg_calories":2316.2,"ema_start":79.9,"ema_end":79.6,"weight_change_kg":-0.27,"pairs_used":28}
+# Success: {"average_tdee":2385.0,"tdee":2391.0,"avg_calories":2316.2,"ema_start":79.9,"ema_end":79.6,"weight_change_kg":-0.27,"pairs_used":28}
 # Error: {"error":"insufficient_calorie_data","message":"Need 14 calorie entries, found 5"}
 
 # WebSocket endpoint for live updates
@@ -364,21 +366,27 @@ Composite index uncertainty uses the maximum relative uncertainty from component
 TDEE (Total Daily Energy Expenditure) is calculated empirically from calorie intake and weight data.
 
 ### Algorithm
-1. **EMA Smoothing**: 10-day exponential moving average (α=0.1) for weight trends
+1. **Weight EMA Smoothing**: 10-day exponential moving average (α=0.1) for weight trends
 2. **Comparison Window**: 28-day period comparing EMA_start and EMA_end
-3. **Formula**: `TDEE = Avg_Calories - (weight_change_kg / 28) × 7700`
+3. **Daily TDEE Formula**: `TDEE = Avg_Calories - (weight_change_kg / 28) × 7700`
+4. **TDEE Smoothing**: Calculate TDEE for last 10 days, apply EMA to get smoothed result
+
+### Output Values
+- **average_tdee**: Smoothed TDEE (EMA over last 10 daily TDEE calculations) - displayed in UI
+- **tdee**: Today's raw TDEE calculation - shown in tooltip
 
 ### EMA Boundary Handling
 The 10-day EMA window may not have data on every day:
 - Window covers `[target_date - 9, target_date]` inclusive
-- EMA initializes with first available weight (not necessarily day 1)
+- EMA initializes with the **last** available value (closest to target date)
+- Processes **backwards** from last to first, giving maximum weight to most recent data
 - If a day has no data, EMA carries forward unchanged
 - Minimum 3 data points required in each 10-day window
 
 ### Data Requirements
 | Requirement | Value | Description |
 |-------------|-------|-------------|
-| Data span | 38+ days | 28-day window + 10-day EMA lookback |
+| Data span | 48+ days | 28-day window + 10-day EMA lookback × 2 (start + TDEE smoothing) |
 | Pair ratio | ≥50% | At least 14 valid calorie-weight pairs in 28 days |
 | EMA points | ≥3 | Minimum weights in each 10-day EMA window |
 
@@ -397,7 +405,7 @@ The 10-day EMA window may not have data on every day:
 - `insufficient_weight_data_ema_start`: Not enough weights in start EMA window
 - `insufficient_weight_data_ema_end`: Not enough weights in end EMA window
 - `insufficient_pairs`: Not enough valid calorie-weight pairs
-- `data_span_too_short`: Data doesn't cover required 38-day span
+- `data_span_too_short`: Data doesn't cover required 48-day span
 
 ## Troubleshooting
 
