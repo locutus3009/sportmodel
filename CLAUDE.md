@@ -55,12 +55,14 @@ sportmodel/
 - `GpHyperparameters`: Length scale, signal variance, noise variance
 - `GpPrediction`: Mean prediction with standard deviation (used for sigma bands)
 - `GpModel`: Fitted GP model with `fit()`, `predict()`, `predict_range()`
+  - Caches Cholesky decomposition from `fit()` for efficient variance computation
+  - Uses batch matrix operations for variance computation (single solve instead of per-point)
 - `GpError`: Error types for insufficient data, singular matrix, invalid params
 - Uses squared exponential (RBF) kernel with Cholesky decomposition for stability
 
 ### analysis.rs
 - `MovementAnalysis`: Predictions and data points for a single movement
-- `analyze_training_data()`: Fits GP models for all movements
+- `analyze_training_data()`: Fits GP models for all movements in parallel (rayon)
 - `PredictionSummary`: Summary stats with CI and trend
 - `find_most_reliable_date_*`: Staleness calculation for composite indices
 
@@ -355,6 +357,28 @@ The chart displays three sigma bands (1σ, 2σ, 3σ) using **predictive variance
 The predictive std_dev is computed as: `sqrt(posterior_variance + noise_variance)`
 
 This ensures ~68%/95%/99.7% of observations fall within 1σ/2σ/3σ bands respectively.
+
+### Performance Optimizations
+
+The GP implementation uses several optimizations for handling large datasets (1000+ observations):
+
+1. **Cached Cholesky Decomposition**: The O(n³) Cholesky factorization is computed once during `fit()` and stored in `GpModel`. This avoids redundant factorization during variance computation.
+
+2. **Batch Variance Computation**: Instead of solving `Lv = k*` for each test point individually (2000+ times), we solve `LV = K*ᵀ` once as a batch matrix operation, then extract column norms.
+
+3. **Parallel Movement Analysis**: Movement GP fitting is parallelized via rayon. Each movement's analysis is independent and runs on a separate thread.
+
+**Complexity Analysis**:
+| Operation | Complexity | Notes |
+|-----------|------------|-------|
+| `GpModel::fit()` | O(n³) | Cholesky decomposition dominates |
+| `GpModel::predict()` means | O(n × m) | Cross-kernel matrix multiplication |
+| `GpModel::predict()` variance | O(n² × m) | Batch triangular solve |
+
+Where n = training observations, m = prediction points.
+
+**Typical Performance** (1405 bodyweight + 6 other movements, 2186 prediction days):
+- Startup time: ~2 seconds (release build)
 
 ## Composite Indices
 

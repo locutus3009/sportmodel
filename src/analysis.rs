@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
+use rayon::prelude::*;
 
 use crate::domain::{DataPoint, Movement, TrainingData};
 use crate::gp::{GpHyperparameters, GpModel, GpPrediction};
@@ -85,23 +86,23 @@ pub fn analyze_movement(
 ///
 /// Returns a HashMap of movement to analysis results. Movements with
 /// insufficient data will have empty predictions.
+///
+/// Uses parallel processing via rayon to analyze movements concurrently,
+/// significantly reducing total analysis time on multi-core systems.
 pub fn analyze_training_data(
     data: &TrainingData,
     prediction_start: NaiveDate,
     prediction_end: NaiveDate,
 ) -> HashMap<Movement, MovementAnalysis> {
-    let mut results = HashMap::new();
-
-    for movement in Movement::all() {
-        let points = data.get(*movement).unwrap_or(&[]);
-        if let Some(analysis) =
-            analyze_movement(*movement, points, prediction_start, prediction_end)
-        {
-            results.insert(*movement, analysis);
-        }
-    }
-
-    results
+    // Process movements in parallel using rayon
+    Movement::all()
+        .par_iter()
+        .filter_map(|&movement| {
+            let points = data.get(movement).unwrap_or(&[]);
+            analyze_movement(movement, points, prediction_start, prediction_end)
+                .map(|analysis| (movement, analysis))
+        })
+        .collect()
 }
 
 /// Finds the date when all component lifts were most recently measured.

@@ -5,7 +5,7 @@
 //! functions like strength progression over time.
 
 use chrono::NaiveDate;
-use nalgebra::{DMatrix, DVector};
+use nalgebra::{Cholesky, DMatrix, DVector, Dyn};
 use thiserror::Error;
 
 use crate::domain::DataPoint;
@@ -137,7 +137,8 @@ impl GpPrediction {
 }
 
 /// Fitted Gaussian Process model for a single movement.
-#[derive(Debug)]
+///
+/// Note: Manual Debug implementation since Cholesky<f64, Dyn> doesn't implement Debug
 pub struct GpModel {
     /// Training data times (days since reference)
     train_times: Vec<f64>,
@@ -148,8 +149,24 @@ pub struct GpModel {
     train_mean: f64,
     /// Precomputed alpha = K^-1 * y for efficient prediction
     alpha: DVector<f64>,
+    /// Cached Cholesky decomposition of kernel matrix (L where K = LLᵀ)
+    /// Used for efficient variance computation without rebuilding the matrix
+    cholesky: Cholesky<f64, Dyn>,
     /// Hyperparameters
     hyperparams: GpHyperparameters,
+}
+
+impl std::fmt::Debug for GpModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpModel")
+            .field("train_times", &self.train_times)
+            .field("train_values", &self.train_values)
+            .field("train_mean", &self.train_mean)
+            .field("alpha", &self.alpha)
+            .field("cholesky", &"<Cholesky decomposition>")
+            .field("hyperparams", &self.hyperparams)
+            .finish()
+    }
 }
 
 impl GpModel {
@@ -180,13 +197,15 @@ impl GpModel {
         );
 
         // Solve K * alpha = y using Cholesky decomposition
-        let alpha = solve_via_cholesky(&k, &train_values)?;
+        // Store the Cholesky factor for efficient variance computation later
+        let (alpha, cholesky) = solve_via_cholesky(&k, &train_values)?;
 
         Ok(Self {
             train_times,
             train_values,
             train_mean,
             alpha,
+            cholesky,
             hyperparams,
         })
     }
@@ -211,8 +230,8 @@ impl GpModel {
         let means = &k_star * &self.alpha;
 
         // For variance, we need K** and K* × K^-1 × K*^T
-        // Compute variance at each test point
-        let variances = self.compute_predictive_variance(&test_times, &k_star);
+        // Compute variance at each test point using batched matrix operations
+        let variances = self.compute_predictive_variance(&k_star);
 
         dates
             .iter()
@@ -250,54 +269,50 @@ impl GpModel {
     }
 
     /// Computes predictive variance at test points.
-    fn compute_predictive_variance(&self, test_times: &[f64], k_star: &DMatrix<f64>) -> Vec<f64> {
-        let n = test_times.len();
-        let mut variances = Vec::with_capacity(n);
+    ///
+    /// Uses the cached Cholesky decomposition from fit() to avoid
+    /// redundant O(n³) matrix factorization.
+    ///
+    /// Batches all triangular solves into a single matrix operation
+    /// for better cache utilization and BLAS optimization.
+    fn compute_predictive_variance(&self, k_star: &DMatrix<f64>) -> Vec<f64> {
+        let m = k_star.nrows(); // Number of test points
 
-        // Rebuild kernel matrix for solving (needed for variance computation)
-        let k = build_kernel_matrix(
-            &self.train_times,
-            self.hyperparams.length_scale_days,
-            self.hyperparams.signal_variance,
-            self.hyperparams.noise_variance,
-        );
+        // k_star is m×n (test points × train points)
+        // We need to solve L * V = K*ᵀ where K*ᵀ is n×m
+        // This gives us V (n×m) in a single batch operation
+        let k_star_t = k_star.transpose();
+        let v = self.cholesky.l().solve_lower_triangular(&k_star_t);
 
-        // Use Cholesky decomposition for efficiency
-        if let Some(chol) = k.clone().cholesky() {
-            for (i, &t) in test_times.iter().enumerate() {
-                // K** diagonal element
-                let k_star_star = squared_exp_kernel(
-                    t,
-                    t,
-                    self.hyperparams.length_scale_days,
-                    self.hyperparams.signal_variance,
-                );
+        match v {
+            Some(v) => {
+                // Compute diagonal of K** - VᵀV efficiently
+                // For each test point i: var_i = k**(t_i, t_i) - ||v_col_i||²
+                // K** diagonal element (self-covariance at test point)
+                // For RBF kernel, k(t,t) = signal_variance (constant for all test points)
+                let k_star_star = self.hyperparams.signal_variance;
 
-                // Get row i of K* as a column vector
-                let k_star_row = k_star.row(i).transpose();
+                let mut variances = Vec::with_capacity(m);
+                for i in 0..m {
+                    // Get column i of V and compute its squared norm
+                    let v_col = v.column(i);
+                    let v_norm_sq = v_col.dot(&v_col);
 
-                // Solve L * v = k_star_row where L is lower Cholesky factor
-                let v = chol.l().solve_lower_triangular(&k_star_row);
-
-                if let Some(v) = v {
                     // Predictive variance = posterior variance + noise variance
-                    // This gives intervals where observations (not just the mean) should fall
-                    let posterior_var = k_star_star - v.dot(&v);
+                    let posterior_var = k_star_star - v_norm_sq;
                     let predictive_var = posterior_var + self.hyperparams.noise_variance;
                     variances.push(predictive_var.max(0.0));
-                } else {
-                    // Fallback: use K** + noise as upper bound
-                    variances.push(k_star_star + self.hyperparams.noise_variance);
                 }
+                variances
             }
-        } else {
-            // Fallback: return signal + noise variance as upper bound
-            for _ in 0..n {
-                variances.push(self.hyperparams.signal_variance + self.hyperparams.noise_variance);
+            None => {
+                // Fallback: return signal + noise variance as upper bound
+                vec![
+                    self.hyperparams.signal_variance + self.hyperparams.noise_variance;
+                    m
+                ]
             }
         }
-
-        variances
     }
 
     /// Returns the training data times for inspection.
@@ -380,11 +395,16 @@ fn build_cross_kernel_matrix(
 
 /// Solves K × α = y using Cholesky decomposition.
 ///
+/// Returns both the solution α and the Cholesky factor for reuse.
 /// Adds jitter to diagonal if initial decomposition fails.
-fn solve_via_cholesky(k: &DMatrix<f64>, y: &DVector<f64>) -> Result<DVector<f64>, GpError> {
+fn solve_via_cholesky(
+    k: &DMatrix<f64>,
+    y: &DVector<f64>,
+) -> Result<(DVector<f64>, Cholesky<f64, Dyn>), GpError> {
     // Try direct Cholesky first
     if let Some(chol) = k.clone().cholesky() {
-        return Ok(chol.solve(y));
+        let alpha = chol.solve(y);
+        return Ok((alpha, chol));
     }
 
     // Add jitter and retry
@@ -396,7 +416,8 @@ fn solve_via_cholesky(k: &DMatrix<f64>, y: &DVector<f64>) -> Result<DVector<f64>
     }
 
     if let Some(chol) = k_jitter.clone().cholesky() {
-        return Ok(chol.solve(y));
+        let alpha = chol.solve(y);
+        return Ok((alpha, chol));
     }
 
     // Try larger jitter
@@ -406,7 +427,8 @@ fn solve_via_cholesky(k: &DMatrix<f64>, y: &DVector<f64>) -> Result<DVector<f64>
     }
 
     if let Some(chol) = k_jitter.cholesky() {
-        return Ok(chol.solve(y));
+        let alpha = chol.solve(y);
+        return Ok((alpha, chol));
     }
 
     Err(GpError::SingularMatrix)
