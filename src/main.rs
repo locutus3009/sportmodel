@@ -77,8 +77,6 @@ async fn main() -> Result<()> {
 
     // Determine static directory (relative to executable or cwd)
     let static_dir = find_static_dir()?;
-    println!();
-    println!("Static files: {}", static_dir.display());
 
     // Spawn file watcher with reload serialization and coalescing
     // - reload_lock: ensures only one reload runs at a time
@@ -108,7 +106,6 @@ async fn main() -> Result<()> {
 
     // Start server
     println!();
-    println!("Live reload enabled - watching for file changes");
     server::run_server(state, args.port, static_dir).await?;
 
     Ok(())
