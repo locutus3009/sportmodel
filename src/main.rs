@@ -11,11 +11,13 @@ mod watcher;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, Local, NaiveDate, Utc};
 use clap::Parser;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::analysis::{
     MovementAnalysis, analyze_training_data, find_most_reliable_date_olympic,
@@ -78,7 +80,11 @@ async fn main() -> Result<()> {
     println!();
     println!("Static files: {}", static_dir.display());
 
-    // Spawn file watcher
+    // Spawn file watcher with reload serialization and coalescing
+    // - reload_lock: ensures only one reload runs at a time
+    // - pending_reload: coalesces multiple events into a single reload
+    let reload_lock: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
+    let pending_reload: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let watcher_state = state.clone();
     let watcher_path = file_path.clone();
     tokio::spawn(async move {
@@ -88,8 +94,10 @@ async fn main() -> Result<()> {
         if let Err(e) = watch_file(&watcher_path, config, move || {
             let state = watcher_state.clone();
             let config = retry_config.clone();
+            let lock = reload_lock.clone();
+            let pending = pending_reload.clone();
             tokio::spawn(async move {
-                reload_with_retry(&state, &config).await;
+                reload_with_coalescing(&state, &config, &lock, &pending).await;
             });
         })
         .await
@@ -227,8 +235,55 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
     })
 }
 
+/// Serializes and coalesces reload operations.
+///
+/// - If no reload is running, acquires lock and reloads
+/// - If a reload is running, marks pending flag and returns immediately
+/// - After reload completes, checks pending flag and reloads again if set
+///
+/// This prevents both concurrent reloads AND redundant sequential reloads.
+async fn reload_with_coalescing(
+    state: &AppState,
+    config: &WatcherConfig,
+    reload_lock: &Mutex<()>,
+    pending: &AtomicBool,
+) {
+    // Try to acquire lock without blocking
+    let guard = match reload_lock.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            // Another reload is in progress - mark pending and return
+            pending.store(true, Ordering::SeqCst);
+            log::info!("Reload already in progress, marking pending");
+            return;
+        }
+    };
+
+    log::info!("Reload triggered, lock acquired");
+
+    // Clear pending flag before starting (we're handling this event)
+    pending.store(false, Ordering::SeqCst);
+
+    // Loop: reload, then check if more events arrived while we were reloading
+    loop {
+        reload_with_retry(state, config).await;
+
+        // Check if another event arrived while we were reloading
+        if pending.swap(false, Ordering::SeqCst) {
+            log::info!("Pending reload detected, reloading again");
+            // Small delay to let file settle
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        } else {
+            break;
+        }
+    }
+
+    drop(guard);
+}
+
 /// Reloads data with retry logic for transient failures.
 async fn reload_with_retry(state: &AppState, config: &WatcherConfig) {
+    let reload_start = Instant::now();
     let mut last_error = None;
 
     for attempt in 0..config.retry_attempts {
@@ -239,14 +294,17 @@ async fn reload_with_retry(state: &AppState, config: &WatcherConfig) {
                 *data = new_data;
                 drop(data);
 
-                log::info!("Data reloaded successfully");
+                log::info!(
+                    "Data reloaded successfully in {}ms",
+                    reload_start.elapsed().as_millis()
+                );
 
                 // Notify WebSocket clients
                 let _ = state.ws_broadcast.send(WsMessage::DataUpdated);
                 return;
             }
             Err(e) => {
-                log::warn!("Reload attempt {} failed: {}", attempt + 1, e);
+                log::debug!("Reload attempt {} failed: {}", attempt + 1, e);
                 last_error = Some(e);
                 tokio::time::sleep(config.retry_delay).await;
             }
@@ -256,8 +314,9 @@ async fn reload_with_retry(state: &AppState, config: &WatcherConfig) {
     // All retries failed
     if let Some(e) = last_error {
         log::error!(
-            "Failed to reload data after {} attempts: {}",
+            "Failed to reload data after {} attempts in {}ms: {}",
             config.retry_attempts,
+            reload_start.elapsed().as_millis(),
             e
         );
 

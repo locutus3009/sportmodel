@@ -91,6 +91,11 @@ pub fn load_training_data<P: AsRef<Path>>(path: P) -> Result<TrainingData, Parse
     for (row_idx, row) in rows.enumerate() {
         let row_num = row_idx + 2; // +1 for 0-index, +1 for header row
 
+        // Skip empty rows silently (common at end of spreadsheets)
+        if row[indices.date] == Data::Empty {
+            continue;
+        }
+
         // Parse date
         let date = match parse_date(&row[indices.date], row_num) {
             Ok(d) => d,
@@ -180,6 +185,11 @@ pub fn load_observations<P: AsRef<Path>>(path: P) -> Result<Vec<Observation>, Pa
 
     for (row_idx, row) in rows.enumerate() {
         let row_num = row_idx + 2; // +1 for 0-index, +1 for header row
+
+        // Skip empty rows silently (common at end of spreadsheets)
+        if row[indices.date] == Data::Empty {
+            continue;
+        }
 
         // Parse date
         let date = match parse_date(&row[indices.date], row_num) {

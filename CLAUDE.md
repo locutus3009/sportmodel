@@ -276,9 +276,10 @@ The server watches the Excel file for modifications and automatically reloads da
 ### How It Works
 1. File watcher monitors the Excel file using the notify crate
 2. Changes are debounced (2 second window) to handle rapid successive writes
-3. On change, data is reloaded with retry logic (3 attempts, 500ms delay)
-4. WebSocket broadcasts "reload" message to all connected browsers
-5. Frontend clears cache and refreshes the current chart
+3. Reload operations are serialized and coalesced (see below)
+4. On change, data is reloaded with retry logic (3 attempts, 500ms delay)
+5. WebSocket broadcasts "reload" message to all connected browsers
+6. Frontend clears cache and refreshes the current chart
 
 ### Debouncing
 Syncthing and Excel may trigger multiple file system events for a single save:
@@ -288,8 +289,17 @@ Syncthing and Excel may trigger multiple file system events for a single save:
 
 The debouncer collapses these into a single reload after activity settles.
 
+### Reload Serialization and Coalescing
+Even with debouncing, multiple events can slip through. The reload system handles this:
+- **Serialization**: Only one reload runs at a time (protected by mutex)
+- **Coalescing**: If events arrive during a reload, they're coalesced into a single pending reload
+- **Result**: At most 2 reloads per save operation (one during save, one after to catch final state)
+
+This prevents concurrent file reads, duplicate WebSocket broadcasts, and wasteful repeated reloads.
+
 ### Error Handling
 - If reload fails, retries up to 3 times with 500ms delay between attempts
+- Transient failures (file mid-save) are logged at debug level, not warn
 - On permanent failure, WebSocket receives "error:message" and toast shows error
 - Old data remains displayed until successful reload
 
