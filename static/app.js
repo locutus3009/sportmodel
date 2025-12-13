@@ -349,11 +349,17 @@ async function loadBodyCompositionData(metricId) {
     // Convert data_points to observations format for chart rendering
     const movementName = metricId === 'bodyfat' ? 'Body Fat %' : 'Lean Body Mass';
 
+    // Find the most recent data point for "Last measurement"
+    const dataPoints = data.data_points || [];
+    const lastObsDate = dataPoints.length > 0
+        ? dataPoints.reduce((latest, p) => p.date > latest ? p.date : latest, dataPoints[0].date)
+        : null;
+
     renderChart({
         movement: movementName,
-        observations: data.data_points || [],
+        observations: dataPoints,
         predictions: data.predictions,
-        last_observation_date: null,
+        last_observation_date: lastObsDate,
         current_value: undefined,
     }, false);
 }
