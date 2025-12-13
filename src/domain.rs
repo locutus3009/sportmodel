@@ -17,6 +17,8 @@ pub enum Movement {
     Snatch,
     CleanAndJerk,
     Calorie,
+    Neck,
+    Waist,
 }
 
 impl Movement {
@@ -30,6 +32,8 @@ impl Movement {
             Movement::Snatch,
             Movement::CleanAndJerk,
             Movement::Calorie,
+            Movement::Neck,
+            Movement::Waist,
         ]
     }
 
@@ -43,6 +47,8 @@ impl Movement {
             Movement::Snatch => "Snatch",
             Movement::CleanAndJerk => "Clean & Jerk",
             Movement::Calorie => "Calorie",
+            Movement::Neck => "Neck",
+            Movement::Waist => "Waist",
         }
     }
 }
@@ -59,6 +65,8 @@ impl FromStr for Movement {
             "snatch" => Ok(Movement::Snatch),
             "cj" | "clean and jerk" | "cleanandjerk" => Ok(Movement::CleanAndJerk),
             "calorie" | "calories" => Ok(Movement::Calorie),
+            "neck" => Ok(Movement::Neck),
+            "waist" => Ok(Movement::Waist),
             _ => Err(ParseError::UnknownMovement {
                 row: 0,
                 value: s.to_string(),
@@ -101,10 +109,13 @@ impl Observation {
     /// Converts this observation to a data point.
     /// For bodyweight, returns the raw weight.
     /// For calories, returns the calorie value (stored in weight_kg field).
+    /// For neck/waist, returns the raw measurement value (in cm).
     /// For lifts, calculates e1RM.
     pub fn to_data_point(&self) -> DataPoint {
         let value = match self.movement {
-            Movement::Bodyweight | Movement::Calorie => self.weight_kg,
+            Movement::Bodyweight | Movement::Calorie | Movement::Neck | Movement::Waist => {
+                self.weight_kg
+            }
             _ => {
                 let reps = self.repetitions.unwrap_or(1);
                 calculate_e1rm(self.weight_kg, reps)

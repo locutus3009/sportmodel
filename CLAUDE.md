@@ -9,16 +9,17 @@ sportmodel/
 ├── Cargo.toml
 ├── sportmodel.service  # Systemd user service unit file
 ├── src/
-│   ├── main.rs         # Entry point: loads data, runs GP analysis, starts web server
-│   ├── domain.rs       # Domain types (Movement, Observation, DataPoint, TrainingData)
-│   ├── error.rs        # Custom error types (ParseError, FormulaError)
-│   ├── excel.rs        # Excel file parsing with calamine
-│   ├── formulas.rs     # Strength calculation formulas (e1RM, IPF GL, Sinclair)
-│   ├── gp.rs           # Gaussian Process regression implementation
-│   ├── analysis.rs     # Analysis orchestration and higher-level functions
-│   ├── server.rs       # Web server (axum) with REST API, WebSocket, and static serving
-│   ├── tdee.rs         # TDEE calculation from calorie and weight data
-│   └── watcher.rs      # File watching with debouncing for live reload
+│   ├── main.rs              # Entry point: loads data, runs GP analysis, starts web server
+│   ├── domain.rs            # Domain types (Movement, Observation, DataPoint, TrainingData)
+│   ├── error.rs             # Custom error types (ParseError, FormulaError)
+│   ├── excel.rs             # Excel file parsing with calamine
+│   ├── formulas.rs          # Strength calculation formulas (e1RM, IPF GL, Sinclair)
+│   ├── gp.rs                # Gaussian Process regression implementation
+│   ├── analysis.rs          # Analysis orchestration and higher-level functions
+│   ├── server.rs            # Web server (axum) with REST API, WebSocket, and static serving
+│   ├── body_composition.rs  # Body fat % and lean body mass calculations
+│   ├── tdee.rs              # TDEE calculation from calorie and weight data
+│   └── watcher.rs           # File watching with debouncing for live reload
 ├── static/
 │   ├── index.html      # Dashboard HTML with tab navigation
 │   ├── style.css       # Dark theme styles
@@ -31,10 +32,18 @@ sportmodel/
 ## Module Responsibilities
 
 ### domain.rs
-- `Movement` enum: Bodyweight, Squat, Bench, Deadlift, Snatch, CleanAndJerk, Calorie
+- `Movement` enum: Bodyweight, Squat, Bench, Deadlift, Snatch, CleanAndJerk, Calorie, Neck, Waist
 - `Observation`: Raw data from Excel (date, weight, reps, movement)
 - `DataPoint`: Processed data ready for GP regression (date, value)
 - `TrainingData`: Container organizing data by movement, sorted by date
+
+### body_composition.rs
+- `calculate_body_fat_pct()`: US Navy formula for body fat percentage
+- `calculate_lbm()`: Lean body mass from bodyweight and BF%
+- `calculate_raw_body_fat_points()`: Computes exact BF% from matched neck/waist measurements
+- `calculate_raw_lbm_points()`: Computes exact LBM from matched bodyweight/neck/waist
+- `analyze_body_fat()`: Fits GP directly to computed BF% values
+- `analyze_lbm()`: Fits GP directly to computed LBM values
 
 ### error.rs
 - `ParseError`: File/Excel parsing errors with row context
@@ -67,13 +76,13 @@ sportmodel/
 - `find_most_reliable_date_*`: Staleness calculation for composite indices
 
 ### server.rs
-- `AnalysisData`: Mutable data container (training data, analyses, composites, TDEE)
+- `AnalysisData`: Mutable data container (training data, analyses, composites, TDEE, body composition)
 - `AppState`: Shared state with `RwLock<AnalysisData>`, file path, and WebSocket broadcast
 - `WsMessage`: WebSocket message types (`DataUpdated`, `Error`)
 - `create_router()`: Configures axum routes, WebSocket endpoint, and static file serving
 - `run_server()`: Starts the HTTP server
 - `ws_handler()`: WebSocket upgrade handler for live updates
-- REST API handlers for movements, composite indices, and TDEE
+- REST API handlers for movements, composite indices, TDEE, and body composition
 
 ### tdee.rs
 - `TdeeResult`: Calculated TDEE with smoothed average, today's TDEE, EMA values, weight change, pairs count
@@ -216,7 +225,7 @@ curl http://localhost:8080/api/movements
 After starting the server, open http://localhost:8080 in your browser.
 
 ### Dashboard Features
-- **8 tabs**: Squat, Bench, Deadlift, Snatch, C&J, IPF GL, Sinclair, Bodyweight
+- **10 tabs**: Squat, Bench, Deadlift, Snatch, C&J, IPF GL, Sinclair, Body Fat %, LBM, Bodyweight
 - **TDEE display**: Header shows smoothed TDEE (hover for today's raw TDEE and details)
 - **Charts**: GP regression curve with three sigma bands (1σ, 2σ, 3σ)
 - **Observations**: Green dots showing actual measurements
@@ -265,6 +274,15 @@ curl "http://localhost:8080/api/composites?history_years=1&prediction_months=6"
 curl http://localhost:8080/api/tdee
 # Success: {"average_tdee":2385.0,"tdee":2391.0,"avg_calories":2316.2,"ema_start":79.9,"ema_end":79.6,"weight_change_kg":-0.27,"pairs_used":28}
 # Error: {"error":"insufficient_calorie_data","message":"Need 14 calorie entries, found 5"}
+
+# Get body composition metrics (requires neck and waist data)
+curl http://localhost:8080/api/bodyfat
+curl http://localhost:8080/api/lbm
+# Success: {"predictions":[{"date":"2024-01-15","mean":18.5,"std_dev":1.2},...], "data_points":[{"date":"2024-01-10","value":18.2},...]}
+# Error: 404 if insufficient neck/waist/bodyweight data
+
+# With custom date range
+curl "http://localhost:8080/api/bodyfat?history_years=3&prediction_months=6"
 
 # WebSocket endpoint for live updates
 # Connect to ws://localhost:8080/ws
@@ -325,9 +343,9 @@ This prevents concurrent file reads, duplicate WebSocket broadcasts, and wastefu
 
 Excel file (.xlsx) with columns:
 - **Date**: Excel date or ISO format string
-- **Weight**: Numeric weight in kg (or calories for calorie entries)
-- **Repetitions**: Integer (empty defaults to 1 for lifts, ignored for bodyweight/calorie)
-- **Movement**: One of: bodyweight, squat, bench, deadlift, snatch, cj, calorie
+- **Weight**: Numeric weight in kg (or calories for calorie entries, or cm for neck/waist)
+- **Repetitions**: Integer (empty defaults to 1 for lifts, ignored for bodyweight/calorie/neck/waist)
+- **Movement**: One of: bodyweight, squat, bench, deadlift, snatch, cj, calorie, neck, waist
 
 ## GP Regression
 
@@ -440,6 +458,64 @@ The 10-day EMA window may not have data on every day:
 - `insufficient_weight_data_ema_end`: Not enough weights in end EMA window
 - `insufficient_pairs`: Not enough valid calorie-weight pairs
 - `data_span_too_short`: Data doesn't cover required 48-day span
+
+## Body Composition
+
+Body Fat Percentage (BF%) and Lean Body Mass (LBM) are calculated by fitting GP regression **directly** to computed values.
+
+### Approach: Direct GP Interpolation
+
+The correct approach for body composition is:
+1. **Compute exact values** from matched measurements (neck+waist on the same day)
+2. **Fit GP regression** directly to these computed BF%/LBM values
+3. **Interpolate BF%/LBM directly** — the GP learns actual BF%/LBM dynamics
+
+This avoids the incorrect approach of interpolating inputs (neck/waist separately) then computing through the nonlinear formula, which produces artificial dynamics due to:
+- GP smoothing on inputs creating artificial correlations
+- Nonlinear transformation (log10) amplifying smoothing artifacts
+- GP hyperparameters tuned to neck/waist dynamics, not BF% dynamics
+
+### US Navy Formula (Men)
+
+BF% is calculated using the US Navy method:
+
+```
+BF% = 495 / (1.0324 - 0.19077 × log10(waist - neck) + 0.15456 × log10(height)) - 450
+```
+
+**Measurements**:
+- Waist: measured at navel level (in cm)
+- Neck: measured at narrowest point below Adam's apple (in cm)
+- Height: constant 180 cm (hardcoded)
+
+**Constraint**: Waist must be greater than neck (waist - neck > 0)
+
+### Lean Body Mass
+
+LBM is calculated from bodyweight and BF%:
+
+```
+LBM = bodyweight × (1 - BF% / 100)
+```
+
+### Data Point Markers
+
+Chart markers (green dots) show dates where ALL required actual measurements exist:
+- **Body Fat %**: Requires both neck AND waist measured on the same day
+- **LBM**: Requires bodyweight, neck, AND waist measured on the same day
+
+The values displayed are the exact computed values (not interpolated).
+
+### Data Requirements
+- Minimum 2 matched neck+waist measurements for BF% GP regression
+- Minimum 2 matched bodyweight+neck+waist measurements for LBM GP regression
+
+### Uncertainty Bands
+
+Uncertainty bands come directly from the GP model fitted to BF%/LBM values. This represents actual uncertainty in the BF%/LBM estimate based on:
+- Distance from actual measurements
+- Variance in the observed BF%/LBM data
+- GP hyperparameters estimated from BF%/LBM dynamics
 
 ## Troubleshooting
 

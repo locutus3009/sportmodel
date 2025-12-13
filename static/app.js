@@ -2,6 +2,7 @@
 
 const MOVEMENTS = ['squat', 'bench', 'deadlift', 'snatch', 'cj', 'bodyweight'];
 const COMPOSITES = ['ipf-gl', 'sinclair'];
+const BODY_COMPOSITION = ['bodyfat', 'lbm'];
 
 // Chart instance
 let chart = null;
@@ -231,6 +232,8 @@ async function loadTabData(tabId) {
     try {
         if (COMPOSITES.includes(tabId)) {
             await loadCompositeData(tabId);
+        } else if (BODY_COMPOSITION.includes(tabId)) {
+            await loadBodyCompositionData(tabId);
         } else {
             await loadMovementData(tabId);
         }
@@ -311,6 +314,48 @@ async function loadCompositeData(compositeId) {
         last_observation_date: data.most_reliable_date,
         current_value: data.current_value,
     }, true);
+}
+
+async function loadBodyCompositionData(metricId) {
+    console.log('Loading body composition data for:', metricId, 'history:', historyYears, 'prediction:', predictionMonths);
+
+    // Build cache key including current params
+    const cacheKey = `${metricId}_${historyYears}_${predictionMonths}`;
+
+    // Check cache
+    if (!dataCache[cacheKey]) {
+        const url = `/api/${metricId}?history_years=${historyYears}&prediction_months=${predictionMonths}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.error('API error:', response.status);
+            if (response.status === 404) {
+                showNoData();
+                return;
+            }
+            throw new Error('API error');
+        }
+        dataCache[cacheKey] = await response.json();
+        console.log('Body composition data loaded:', dataCache[cacheKey]);
+    }
+
+    const data = dataCache[cacheKey];
+
+    if (!data || !data.predictions || data.predictions.length === 0) {
+        console.log('No body composition data available for:', metricId);
+        showNoData();
+        return;
+    }
+
+    // Convert data_points to observations format for chart rendering
+    const movementName = metricId === 'bodyfat' ? 'Body Fat %' : 'Lean Body Mass';
+
+    renderChart({
+        movement: movementName,
+        observations: data.data_points || [],
+        predictions: data.predictions,
+        last_observation_date: null,
+        current_value: undefined,
+    }, false);
 }
 
 function showNoData() {
@@ -445,6 +490,10 @@ function renderChart(data, isComposite) {
     let yAxisLabel = isComposite ? 'Score' : 'e1RM (kg)';
     if (currentTab === 'bodyweight') {
         yAxisLabel = 'Weight (kg)';
+    } else if (currentTab === 'bodyfat') {
+        yAxisLabel = 'Body Fat %';
+    } else if (currentTab === 'lbm') {
+        yAxisLabel = 'kg';
     }
 
     // Destroy existing chart

@@ -44,6 +44,10 @@ pub struct AnalysisData {
     pub ipf_gl: Option<CompositeAnalysis>,
     pub sinclair: Option<CompositeAnalysis>,
     pub tdee: Result<TdeeResult, TdeeError>,
+    /// Body fat percentage analysis (GP fitted directly to BF% values)
+    pub body_fat: Option<MovementAnalysis>,
+    /// Lean body mass analysis (GP fitted directly to LBM values)
+    pub lbm: Option<MovementAnalysis>,
     #[allow(dead_code)] // May be used for future features
     pub last_reload: chrono::DateTime<Utc>,
 }
@@ -136,6 +140,13 @@ pub enum TdeeResponse {
     Error { error: String, message: String },
 }
 
+/// Response type for body composition endpoints (BF%, LBM).
+#[derive(Serialize)]
+pub struct BodyCompositionResponse {
+    pub predictions: Vec<PredictionJson>,
+    pub data_points: Vec<DataPointJson>,
+}
+
 // === Query Parameters ===
 
 /// Query parameters for movement data endpoint.
@@ -166,6 +177,8 @@ pub fn create_router(state: Arc<AppState>, static_dir: PathBuf) -> Router {
         .route("/api/movement/{name}", get(get_movement_data))
         .route("/api/composites", get(get_composites))
         .route("/api/tdee", get(get_tdee))
+        .route("/api/bodyfat", get(get_bodyfat))
+        .route("/api/lbm", get(get_lbm))
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .with_state(state)
@@ -516,6 +529,116 @@ async fn get_tdee(State(state): State<Arc<AppState>>) -> Json<TdeeResponse> {
     Json(response)
 }
 
+/// GET /api/bodyfat - Body fat percentage predictions.
+///
+/// Query parameters:
+/// - `history_years`: 1-5 (default 2) - years of historical data to show
+/// - `prediction_months`: 6 or 12 (default 12) - months into the future to predict
+async fn get_bodyfat(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<MovementQuery>,
+) -> Result<Json<BodyCompositionResponse>, StatusCode> {
+    let history_years = params.history_years.clamp(1, 5);
+    let prediction_months = if params.prediction_months >= 12 {
+        12
+    } else {
+        6
+    };
+
+    let today = Local::now().date_naive();
+    let history_start = today - Duration::days(i64::from(history_years) * 365);
+    let prediction_end = today + Duration::days(i64::from(prediction_months) * 30);
+
+    let data = state.data.read().await;
+
+    let Some(body_fat) = &data.body_fat else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    // Filter predictions to the requested date range
+    let predictions: Vec<PredictionJson> = body_fat
+        .predictions
+        .iter()
+        .filter(|p| p.date >= history_start && p.date <= prediction_end)
+        .map(|p| PredictionJson {
+            date: p.date.to_string(),
+            mean: p.mean,
+            std_dev: p.std_dev,
+        })
+        .collect();
+
+    // Data points are the actual computed BF% values from matched measurements
+    let data_points: Vec<DataPointJson> = body_fat
+        .data_points
+        .iter()
+        .filter(|dp| dp.date >= history_start && dp.date <= prediction_end)
+        .map(|dp| DataPointJson {
+            date: dp.date.to_string(),
+            value: dp.value,
+        })
+        .collect();
+
+    Ok(Json(BodyCompositionResponse {
+        predictions,
+        data_points,
+    }))
+}
+
+/// GET /api/lbm - Lean body mass predictions.
+///
+/// Query parameters:
+/// - `history_years`: 1-5 (default 2) - years of historical data to show
+/// - `prediction_months`: 6 or 12 (default 12) - months into the future to predict
+async fn get_lbm(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<MovementQuery>,
+) -> Result<Json<BodyCompositionResponse>, StatusCode> {
+    let history_years = params.history_years.clamp(1, 5);
+    let prediction_months = if params.prediction_months >= 12 {
+        12
+    } else {
+        6
+    };
+
+    let today = Local::now().date_naive();
+    let history_start = today - Duration::days(i64::from(history_years) * 365);
+    let prediction_end = today + Duration::days(i64::from(prediction_months) * 30);
+
+    let data = state.data.read().await;
+
+    let Some(lbm) = &data.lbm else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    // Filter predictions to the requested date range
+    let predictions: Vec<PredictionJson> = lbm
+        .predictions
+        .iter()
+        .filter(|p| p.date >= history_start && p.date <= prediction_end)
+        .map(|p| PredictionJson {
+            date: p.date.to_string(),
+            mean: p.mean,
+            std_dev: p.std_dev,
+        })
+        .collect();
+
+    // Data points are the actual computed LBM values from matched measurements
+    let data_points: Vec<DataPointJson> = lbm
+        .data_points
+        .iter()
+        .filter(|dp| dp.date >= history_start && dp.date <= prediction_end)
+        .map(|dp| DataPointJson {
+            date: dp.date.to_string(),
+            value: dp.value,
+        })
+        .collect();
+
+    Ok(Json(BodyCompositionResponse {
+        predictions,
+        data_points,
+    }))
+}
+
 // === Helper Functions ===
 
 fn movement_to_id(movement: Movement) -> String {
@@ -527,6 +650,8 @@ fn movement_to_id(movement: Movement) -> String {
         Movement::Snatch => "snatch".to_string(),
         Movement::CleanAndJerk => "cj".to_string(),
         Movement::Calorie => "calorie".to_string(),
+        Movement::Neck => "neck".to_string(),
+        Movement::Waist => "waist".to_string(),
     }
 }
 
@@ -539,6 +664,8 @@ fn id_to_movement(id: &str) -> Option<Movement> {
         "snatch" => Some(Movement::Snatch),
         "cj" | "cleanandjerk" => Some(Movement::CleanAndJerk),
         "calorie" => Some(Movement::Calorie),
+        "neck" => Some(Movement::Neck),
+        "waist" => Some(Movement::Waist),
         _ => None,
     }
 }

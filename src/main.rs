@@ -1,4 +1,5 @@
 mod analysis;
+mod body_composition;
 mod domain;
 mod error;
 mod excel;
@@ -190,6 +191,51 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
         println!("Sinclair: insufficient data (need snatch, C&J, bodyweight)");
     }
 
+    // Calculate body composition (BF%, LBM) by fitting GP directly to computed values
+    println!();
+    println!("=== Calculating Body Composition ===");
+
+    let body_fat = body_composition::analyze_body_fat(&analysis_results, prediction_start, prediction_end);
+    let lbm = body_composition::analyze_lbm(&analysis_results, prediction_start, prediction_end);
+
+    match &body_fat {
+        Some(bf) if bf.has_predictions() => {
+            println!(
+                "Body Fat %: computed ({} prediction days, {} measurement days)",
+                bf.predictions.len(),
+                bf.data_points.len()
+            );
+        }
+        Some(bf) => {
+            println!(
+                "Body Fat %: insufficient matched data ({} measurement days, need 2+)",
+                bf.data_points.len()
+            );
+        }
+        None => {
+            println!("Body Fat %: no neck or waist data available");
+        }
+    }
+
+    match &lbm {
+        Some(l) if l.has_predictions() => {
+            println!(
+                "LBM: computed ({} prediction days, {} measurement days)",
+                l.predictions.len(),
+                l.data_points.len()
+            );
+        }
+        Some(l) => {
+            println!(
+                "LBM: insufficient matched data ({} measurement days, need 2+)",
+                l.data_points.len()
+            );
+        }
+        None => {
+            println!("LBM: no bodyweight, neck, or waist data available");
+        }
+    }
+
     // Calculate TDEE from calorie and weight observations
     println!();
     println!("=== Calculating TDEE ===");
@@ -228,6 +274,8 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
         ipf_gl,
         sinclair,
         tdee,
+        body_fat,
+        lbm,
         last_reload: Utc::now(),
     })
 }

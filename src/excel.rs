@@ -311,10 +311,13 @@ fn parse_weight(cell: &Data, row: usize) -> Result<f64, ParseError> {
 }
 
 /// Parses repetitions from a cell.
-/// Returns None for bodyweight and calorie movements.
+/// Returns None for bodyweight, calorie, neck, and waist movements.
 fn parse_reps(cell: &Data, row: usize, movement: Movement) -> Result<Option<u32>, ParseError> {
-    // Bodyweight and Calorie don't need reps
-    if movement == Movement::Bodyweight || movement == Movement::Calorie {
+    // Bodyweight, Calorie, Neck, and Waist don't need reps
+    if matches!(
+        movement,
+        Movement::Bodyweight | Movement::Calorie | Movement::Neck | Movement::Waist
+    ) {
         return Ok(None);
     }
 
