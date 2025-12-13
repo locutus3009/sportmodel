@@ -24,10 +24,10 @@ use crate::analysis::{
     MovementAnalysis, analyze_training_data, find_most_reliable_date_olympic,
     find_most_reliable_date_powerlifting,
 };
-use crate::gp::GpConfig;
 use crate::domain::Movement;
 use crate::excel::{load_observations, load_training_data};
 use crate::formulas::{calculate_ipf_gl, calculate_sinclair};
+use crate::gp::GpConfig;
 use crate::server::{AnalysisData, AppState, CompositeAnalysis, CompositePrediction, WsMessage};
 use crate::tdee::calculate_tdee;
 use crate::watcher::{WatcherConfig, watch_file};
@@ -159,7 +159,8 @@ fn load_and_analyze(file_path: &PathBuf, gp_config: &GpConfig) -> Result<Analysi
     let prediction_start = today - Duration::days(5 * 365);
     let prediction_end = today + Duration::days(360);
 
-    let analysis_results = analyze_training_data(&data, prediction_start, prediction_end, gp_config);
+    let analysis_results =
+        analyze_training_data(&data, prediction_start, prediction_end, gp_config);
 
     // Count movements with predictions
     let movements_with_predictions = analysis_results
@@ -200,8 +201,18 @@ fn load_and_analyze(file_path: &PathBuf, gp_config: &GpConfig) -> Result<Analysi
     println!();
     println!("=== Calculating Body Composition ===");
 
-    let body_fat = body_composition::analyze_body_fat(&analysis_results, prediction_start, prediction_end, gp_config);
-    let lbm = body_composition::analyze_lbm(&analysis_results, prediction_start, prediction_end, gp_config);
+    let body_fat = body_composition::analyze_body_fat(
+        &analysis_results,
+        prediction_start,
+        prediction_end,
+        gp_config,
+    );
+    let lbm = body_composition::analyze_lbm(
+        &analysis_results,
+        prediction_start,
+        prediction_end,
+        gp_config,
+    );
 
     match &body_fat {
         Some(bf) if bf.has_predictions() => {

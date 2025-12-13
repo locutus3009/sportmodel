@@ -364,9 +364,15 @@ async fn get_movement_data(
 
     // Re-run GP analysis with the filtered data and custom prediction range
     let predictions = if filtered_points.len() >= 2 {
-        analyze_movement(movement, &filtered_points, history_start, prediction_end, &state.gp_config)
-            .map(|a| a.predictions)
-            .unwrap_or_default()
+        analyze_movement(
+            movement,
+            &filtered_points,
+            history_start,
+            prediction_end,
+            &state.gp_config,
+        )
+        .map(|a| a.predictions)
+        .unwrap_or_default()
     } else {
         Vec::new()
     };

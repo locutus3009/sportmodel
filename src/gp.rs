@@ -358,10 +358,7 @@ impl GpModel {
             }
             None => {
                 // Fallback: return signal + noise variance as upper bound
-                vec![
-                    self.hyperparams.signal_variance + self.hyperparams.noise_variance;
-                    m
-                ]
+                vec![self.hyperparams.signal_variance + self.hyperparams.noise_variance; m]
             }
         }
     }
@@ -417,10 +414,7 @@ impl GpModel {
 /// Searches over noise ratios: [0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]
 /// Signal variance is estimated from data variance (with minimum floor).
 #[allow(dead_code)] // Use optimize_noise_with_metadata for logging
-pub fn optimize_noise(
-    data: &[DataPoint],
-    length_scale: f64,
-) -> Result<GpHyperparameters, GpError> {
+pub fn optimize_noise(data: &[DataPoint], length_scale: f64) -> Result<GpHyperparameters, GpError> {
     if data.len() < 2 {
         return Err(GpError::InsufficientData(data.len()));
     }
@@ -467,7 +461,9 @@ pub fn optimize_noise(
 
     // Return best or fall back to heuristic estimate
     best_hyperparams.ok_or_else(|| {
-        GpError::InvalidHyperparameters("noise optimization found no valid hyperparameters".to_string())
+        GpError::InvalidHyperparameters(
+            "noise optimization found no valid hyperparameters".to_string(),
+        )
     })
 }
 
@@ -536,7 +532,9 @@ pub fn optimize_noise_with_metadata(
             noise_ratio: best_noise_ratio,
         })
         .ok_or_else(|| {
-            GpError::InvalidHyperparameters("noise optimization found no valid hyperparameters".to_string())
+            GpError::InvalidHyperparameters(
+                "noise optimization found no valid hyperparameters".to_string(),
+            )
         })
 }
 

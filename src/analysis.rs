@@ -9,9 +9,7 @@ use chrono::NaiveDate;
 use rayon::prelude::*;
 
 use crate::domain::{DataPoint, Movement, TrainingData};
-use crate::gp::{
-    optimize_noise_with_metadata, GpConfig, GpHyperparameters, GpModel, GpPrediction,
-};
+use crate::gp::{GpConfig, GpHyperparameters, GpModel, GpPrediction, optimize_noise_with_metadata};
 
 /// Analysis results for a single movement.
 #[derive(Debug)]
@@ -142,8 +140,14 @@ pub fn analyze_training_data(
         .par_iter()
         .filter_map(|&movement| {
             let points = data.get(movement).unwrap_or(&[]);
-            analyze_movement(movement, points, prediction_start, prediction_end, gp_config)
-                .map(|analysis| (movement, analysis))
+            analyze_movement(
+                movement,
+                points,
+                prediction_start,
+                prediction_end,
+                gp_config,
+            )
+            .map(|analysis| (movement, analysis))
         })
         .collect()
 }

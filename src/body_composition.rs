@@ -14,7 +14,7 @@ use chrono::NaiveDate;
 
 use crate::analysis::MovementAnalysis;
 use crate::domain::{DataPoint, Movement};
-use crate::gp::{optimize_noise_with_metadata, GpConfig, GpHyperparameters, GpModel};
+use crate::gp::{GpConfig, GpHyperparameters, GpModel, optimize_noise_with_metadata};
 
 /// Height constant for BF% calculation (in cm).
 /// This is a user-specific constant that could be made configurable in the future.
@@ -137,10 +137,8 @@ pub fn analyze_body_fat(
     let waist_analysis = analyses.get(&Movement::Waist)?;
 
     // Calculate raw BF% data points from matched measurements
-    let bf_points = calculate_raw_body_fat_points(
-        &neck_analysis.data_points,
-        &waist_analysis.data_points,
-    );
+    let bf_points =
+        calculate_raw_body_fat_points(&neck_analysis.data_points, &waist_analysis.data_points);
 
     // Need at least 2 points for GP regression
     if bf_points.len() < 2 {
@@ -298,8 +296,18 @@ mod tests {
         let bf2 = calculate_body_fat_pct(85.0, 40.0).unwrap();
         let bf3 = calculate_body_fat_pct(90.0, 40.0).unwrap();
 
-        assert!(bf1 < bf2, "BF% should increase with waist: {} vs {}", bf1, bf2);
-        assert!(bf2 < bf3, "BF% should increase with waist: {} vs {}", bf2, bf3);
+        assert!(
+            bf1 < bf2,
+            "BF% should increase with waist: {} vs {}",
+            bf1,
+            bf2
+        );
+        assert!(
+            bf2 < bf3,
+            "BF% should increase with waist: {} vs {}",
+            bf2,
+            bf3
+        );
     }
 
     #[test]
@@ -309,21 +317,49 @@ mod tests {
         let bf2 = calculate_body_fat_pct(85.0, 40.0).unwrap();
         let bf3 = calculate_body_fat_pct(85.0, 42.0).unwrap();
 
-        assert!(bf1 > bf2, "BF% should decrease with neck: {} vs {}", bf1, bf2);
-        assert!(bf2 > bf3, "BF% should decrease with neck: {} vs {}", bf2, bf3);
+        assert!(
+            bf1 > bf2,
+            "BF% should decrease with neck: {} vs {}",
+            bf1,
+            bf2
+        );
+        assert!(
+            bf2 > bf3,
+            "BF% should decrease with neck: {} vs {}",
+            bf2,
+            bf3
+        );
     }
 
     #[test]
     fn test_calculate_raw_body_fat_points_matched_dates() {
         let neck_points = vec![
-            DataPoint { date: make_date(2024, 1, 1), value: 38.0 },
-            DataPoint { date: make_date(2024, 1, 15), value: 38.5 },
-            DataPoint { date: make_date(2024, 2, 1), value: 39.0 },
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 38.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 15),
+                value: 38.5,
+            },
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 39.0,
+            },
         ];
         let waist_points = vec![
-            DataPoint { date: make_date(2024, 1, 1), value: 90.0 },
-            DataPoint { date: make_date(2024, 1, 10), value: 89.0 }, // No neck match
-            DataPoint { date: make_date(2024, 2, 1), value: 88.0 },
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 90.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 10),
+                value: 89.0,
+            }, // No neck match
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 88.0,
+            },
         ];
 
         let bf_points = calculate_raw_body_fat_points(&neck_points, &waist_points);
@@ -340,12 +376,14 @@ mod tests {
 
     #[test]
     fn test_calculate_raw_body_fat_points_no_matches() {
-        let neck_points = vec![
-            DataPoint { date: make_date(2024, 1, 1), value: 38.0 },
-        ];
-        let waist_points = vec![
-            DataPoint { date: make_date(2024, 1, 2), value: 90.0 },
-        ];
+        let neck_points = vec![DataPoint {
+            date: make_date(2024, 1, 1),
+            value: 38.0,
+        }];
+        let waist_points = vec![DataPoint {
+            date: make_date(2024, 1, 2),
+            value: 90.0,
+        }];
 
         let bf_points = calculate_raw_body_fat_points(&neck_points, &waist_points);
 
@@ -355,17 +393,38 @@ mod tests {
     #[test]
     fn test_calculate_raw_lbm_points() {
         let bodyweight_points = vec![
-            DataPoint { date: make_date(2024, 1, 1), value: 80.0 },
-            DataPoint { date: make_date(2024, 1, 15), value: 79.0 }, // No neck/waist match
-            DataPoint { date: make_date(2024, 2, 1), value: 78.0 },
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 80.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 15),
+                value: 79.0,
+            }, // No neck/waist match
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 78.0,
+            },
         ];
         let neck_points = vec![
-            DataPoint { date: make_date(2024, 1, 1), value: 38.0 },
-            DataPoint { date: make_date(2024, 2, 1), value: 38.5 },
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 38.0,
+            },
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 38.5,
+            },
         ];
         let waist_points = vec![
-            DataPoint { date: make_date(2024, 1, 1), value: 90.0 },
-            DataPoint { date: make_date(2024, 2, 1), value: 88.0 },
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 90.0,
+            },
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 88.0,
+            },
         ];
 
         let lbm_points = calculate_raw_lbm_points(&bodyweight_points, &neck_points, &waist_points);
