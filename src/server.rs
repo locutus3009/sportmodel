@@ -25,6 +25,7 @@ use tower_http::services::ServeDir;
 
 use crate::analysis::{MovementAnalysis, analyze_movement};
 use crate::domain::{Movement, TrainingData};
+use crate::gp::GpConfig;
 use crate::tdee::{TdeeError, TdeeResult};
 
 /// Message types for WebSocket broadcast.
@@ -60,6 +61,8 @@ pub struct AppState {
     pub file_path: PathBuf,
     /// Broadcast channel for WebSocket notifications.
     pub ws_broadcast: broadcast::Sender<WsMessage>,
+    /// GP configuration for hyperparameters.
+    pub gp_config: GpConfig,
 }
 
 /// Analysis data for composite indices (IPF GL, Sinclair).
@@ -361,7 +364,7 @@ async fn get_movement_data(
 
     // Re-run GP analysis with the filtered data and custom prediction range
     let predictions = if filtered_points.len() >= 2 {
-        analyze_movement(movement, &filtered_points, history_start, prediction_end)
+        analyze_movement(movement, &filtered_points, history_start, prediction_end, &state.gp_config)
             .map(|a| a.predictions)
             .unwrap_or_default()
     } else {

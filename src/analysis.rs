@@ -9,7 +9,9 @@ use chrono::NaiveDate;
 use rayon::prelude::*;
 
 use crate::domain::{DataPoint, Movement, TrainingData};
-use crate::gp::{GpHyperparameters, GpModel, GpPrediction};
+use crate::gp::{
+    optimize_noise_with_metadata, GpConfig, GpHyperparameters, GpModel, GpPrediction,
+};
 
 /// Analysis results for a single movement.
 #[derive(Debug)]
@@ -41,12 +43,15 @@ impl MovementAnalysis {
 
 /// Analyzes training data for a single movement.
 ///
+/// Uses per-movement length scale (domain knowledge) and optimizes noise variance
+/// via log marginal likelihood maximization.
 /// Returns None if there's insufficient data for GP regression.
 pub fn analyze_movement(
     movement: Movement,
     data: &[DataPoint],
     prediction_start: NaiveDate,
     prediction_end: NaiveDate,
+    gp_config: &GpConfig,
 ) -> Option<MovementAnalysis> {
     if data.len() < 2 {
         return Some(MovementAnalysis {
@@ -57,19 +62,56 @@ pub fn analyze_movement(
         });
     }
 
-    // Estimate hyperparameters from data
-    let hyperparams = match GpHyperparameters::estimate_from_data(data) {
-        Ok(hp) => hp,
-        Err(_) => return None,
+    // Get fixed length scale for this movement type (domain knowledge)
+    let length_scale = gp_config.length_scale_for(movement);
+
+    // Optimize noise variance via log marginal likelihood
+    let optimized = match optimize_noise_with_metadata(data, length_scale) {
+        Ok(opt) => opt,
+        Err(_) => {
+            // Fall back to heuristic estimation if optimization fails
+            let hp = GpHyperparameters::estimate_from_data(data).ok()?;
+            log::warn!(
+                "{}: optimization failed, using heuristic (l={:.0}, noise_ratio={:.2})",
+                movement.display_name(),
+                hp.length_scale_days,
+                hp.noise_variance / hp.signal_variance
+            );
+            return fit_and_predict(movement, data, hp, prediction_start, prediction_end);
+        }
     };
 
-    // Fit GP model
+    log::info!(
+        "{}: l={:.0}, noise_ratio={:.2}, log_lik={:.1} (n={})",
+        movement.display_name(),
+        length_scale as i32,
+        optimized.noise_ratio,
+        optimized.log_marginal_likelihood,
+        data.len()
+    );
+
+    fit_and_predict(
+        movement,
+        data,
+        optimized.hyperparams,
+        prediction_start,
+        prediction_end,
+    )
+}
+
+/// Helper function to fit GP model and generate predictions.
+fn fit_and_predict(
+    movement: Movement,
+    data: &[DataPoint],
+    hyperparams: GpHyperparameters,
+    prediction_start: NaiveDate,
+    prediction_end: NaiveDate,
+) -> Option<MovementAnalysis> {
     let model = match GpModel::fit(data, hyperparams) {
         Ok(m) => m,
         Err(_) => return None,
     };
 
-    // Generate predictions
     let predictions = model
         .predict_range(prediction_start, prediction_end)
         .unwrap_or_default();
@@ -93,13 +135,14 @@ pub fn analyze_training_data(
     data: &TrainingData,
     prediction_start: NaiveDate,
     prediction_end: NaiveDate,
+    gp_config: &GpConfig,
 ) -> HashMap<Movement, MovementAnalysis> {
     // Process movements in parallel using rayon
     Movement::all()
         .par_iter()
         .filter_map(|&movement| {
             let points = data.get(movement).unwrap_or(&[]);
-            analyze_movement(movement, points, prediction_start, prediction_end)
+            analyze_movement(movement, points, prediction_start, prediction_end, gp_config)
                 .map(|analysis| (movement, analysis))
         })
         .collect()
@@ -205,7 +248,8 @@ impl PredictionSummary {
 
 /// Attempts to fit a GP model with error handling.
 ///
-/// Returns a descriptive error message if fitting fails.
+/// Uses per-movement length scale (domain knowledge) and optimizes noise variance
+/// via log marginal likelihood. Returns a descriptive error message if fitting fails.
 #[allow(dead_code)] // Used in Phase 3
 pub fn fit_with_diagnostics(movement: Movement, data: &[DataPoint]) -> Result<GpModel, String> {
     if data.is_empty() {
@@ -219,13 +263,28 @@ pub fn fit_with_diagnostics(movement: Movement, data: &[DataPoint]) -> Result<Gp
         ));
     }
 
-    let hyperparams = GpHyperparameters::estimate_from_data(data).map_err(|e| {
-        format!(
-            "Failed to estimate hyperparameters for {}: {}",
-            movement.display_name(),
-            e
-        )
-    })?;
+    // Get fixed length scale for this movement type (domain knowledge)
+    let length_scale = GpConfig::default().length_scale_for(movement);
+
+    // Optimize noise variance, fall back to heuristic
+    let hyperparams = match optimize_noise_with_metadata(data, length_scale) {
+        Ok(opt) => {
+            log::debug!(
+                "{}: l={:.0}, noise_ratio={:.2}",
+                movement.display_name(),
+                length_scale as i32,
+                opt.noise_ratio
+            );
+            opt.hyperparams
+        }
+        Err(_) => GpHyperparameters::estimate_from_data(data).map_err(|e| {
+            format!(
+                "Failed to estimate hyperparameters for {}: {}",
+                movement.display_name(),
+                e
+            )
+        })?,
+    };
 
     GpModel::fit(data, hyperparams)
         .map_err(|e| format!("Failed to fit GP for {}: {}", movement.display_name(), e))
@@ -245,12 +304,14 @@ mod tests {
             date: make_date(2024, 1, 1),
             value: 100.0,
         }];
+        let gp_config = GpConfig::default();
 
         let analysis = analyze_movement(
             Movement::Squat,
             &data,
             make_date(2024, 1, 1),
             make_date(2024, 3, 1),
+            &gp_config,
         )
         .unwrap();
 
@@ -274,12 +335,14 @@ mod tests {
                 value: 115.0,
             },
         ];
+        let gp_config = GpConfig::default();
 
         let analysis = analyze_movement(
             Movement::Squat,
             &data,
             make_date(2024, 1, 1),
             make_date(2024, 4, 1),
+            &gp_config,
         )
         .unwrap();
 

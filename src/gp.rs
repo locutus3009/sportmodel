@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use nalgebra::{Cholesky, DMatrix, DVector, Dyn};
 use thiserror::Error;
 
-use crate::domain::DataPoint;
+use crate::domain::{DataPoint, Movement};
 
 /// Reference date for converting dates to numeric values.
 /// All dates are converted to days since this reference.
@@ -16,6 +16,57 @@ const REFERENCE_DATE: NaiveDate = match NaiveDate::from_ymd_opt(2020, 1, 1) {
     Some(d) => d,
     None => panic!("Invalid reference date"),
 };
+
+/// Default GP hyperparameter configuration.
+///
+/// Length scale is domain knowledge, not optimized from data.
+/// This struct allows easy customization per movement category,
+/// with the option to add per-movement overrides in the future.
+#[derive(Debug, Clone)]
+pub struct GpConfig {
+    /// Length scale for strength movements (squat, bench, deadlift, snatch, cj).
+    /// Strength adaptations are slow, taking months to manifest.
+    pub length_scale_strength: f64,
+
+    /// Length scale for body composition (bodyweight, neck, waist, BF%, LBM).
+    /// Body composition changes faster during cuts/bulks.
+    pub length_scale_body_comp: f64,
+
+    /// Length scale for energy/calorie tracking.
+    pub length_scale_energy: f64,
+}
+
+impl Default for GpConfig {
+    fn default() -> Self {
+        Self {
+            length_scale_strength: 90.0,
+            length_scale_body_comp: 60.0,
+            length_scale_energy: 60.0,
+        }
+    }
+}
+
+impl GpConfig {
+    /// Returns the length scale for a given movement type.
+    pub fn length_scale_for(&self, movement: Movement) -> f64 {
+        match movement {
+            Movement::Squat
+            | Movement::Bench
+            | Movement::Deadlift
+            | Movement::Snatch
+            | Movement::CleanAndJerk => self.length_scale_strength,
+
+            Movement::Bodyweight | Movement::Neck | Movement::Waist => self.length_scale_body_comp,
+
+            Movement::Calorie => self.length_scale_energy,
+        }
+    }
+
+    /// Returns the length scale for derived body composition metrics (BF%, LBM).
+    pub fn length_scale_body_composition(&self) -> f64 {
+        self.length_scale_body_comp
+    }
+}
 
 /// Errors that can occur during GP operations.
 #[derive(Debug, Error)]
@@ -326,6 +377,167 @@ impl GpModel {
     pub fn n_train(&self) -> usize {
         self.train_times.len()
     }
+
+    /// Computes the log marginal likelihood of the training data given the hyperparameters.
+    ///
+    /// log p(y|X,θ) = -½ yᵀK⁻¹y - ½ log|K| - n/2 log(2π)
+    ///
+    /// Uses cached Cholesky decomposition for efficiency:
+    /// - yᵀK⁻¹y = yᵀα (α already computed during fit)
+    /// - log|K| = 2 Σᵢ log(Lᵢᵢ) where K = LLᵀ
+    pub fn log_marginal_likelihood(&self) -> f64 {
+        let n = self.train_times.len() as f64;
+
+        // Data fit term: -½ yᵀK⁻¹y = -½ yᵀα
+        let data_fit = -0.5 * self.train_values.dot(&self.alpha);
+
+        // Complexity penalty: -½ log|K| = -Σᵢ log(Lᵢᵢ)
+        let l = self.cholesky.l();
+        let log_det = (0..l.nrows()).map(|i| l[(i, i)].ln()).sum::<f64>();
+        let complexity = -log_det;
+
+        // Constant term: -n/2 log(2π)
+        let constant = -0.5 * n * (2.0 * std::f64::consts::PI).ln();
+
+        data_fit + complexity + constant
+    }
+
+    /// Returns the hyperparameters used by this model.
+    #[allow(dead_code)] // Useful for diagnostics
+    pub fn hyperparameters(&self) -> &GpHyperparameters {
+        &self.hyperparams
+    }
+}
+
+/// Optimizes noise variance via log marginal likelihood maximization.
+///
+/// Length scale is fixed (domain knowledge), only noise is optimized.
+/// This prevents overfitting that occurs when length_scale is in the search grid.
+///
+/// Searches over noise ratios: [0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]
+/// Signal variance is estimated from data variance (with minimum floor).
+#[allow(dead_code)] // Use optimize_noise_with_metadata for logging
+pub fn optimize_noise(
+    data: &[DataPoint],
+    length_scale: f64,
+) -> Result<GpHyperparameters, GpError> {
+    if data.len() < 2 {
+        return Err(GpError::InsufficientData(data.len()));
+    }
+
+    // Estimate signal variance from data
+    let values: Vec<f64> = data.iter().map(|p| p.value).collect();
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+    let signal_variance = variance.max(1.0);
+
+    // Fine grid for noise ratios (cheap since 1D search)
+    let noise_ratios = [
+        0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5,
+    ];
+
+    let mut best_log_lik = f64::NEG_INFINITY;
+    let mut best_hyperparams: Option<GpHyperparameters> = None;
+
+    for &noise_ratio in &noise_ratios {
+        let noise_variance = signal_variance * noise_ratio;
+
+        // Try to create valid hyperparameters
+        let hyperparams =
+            match GpHyperparameters::new(length_scale, signal_variance, noise_variance) {
+                Ok(hp) => hp,
+                Err(_) => continue,
+            };
+
+        // Try to fit the model
+        let model = match GpModel::fit(data, hyperparams.clone()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        // Compute log marginal likelihood
+        let log_lik = model.log_marginal_likelihood();
+
+        // Check for valid likelihood (not NaN or -Inf)
+        if log_lik.is_finite() && log_lik > best_log_lik {
+            best_log_lik = log_lik;
+            best_hyperparams = Some(hyperparams);
+        }
+    }
+
+    // Return best or fall back to heuristic estimate
+    best_hyperparams.ok_or_else(|| {
+        GpError::InvalidHyperparameters("noise optimization found no valid hyperparameters".to_string())
+    })
+}
+
+/// Optimized hyperparameters with metadata about the optimization.
+#[derive(Debug, Clone)]
+pub struct OptimizedHyperparameters {
+    pub hyperparams: GpHyperparameters,
+    pub log_marginal_likelihood: f64,
+    pub noise_ratio: f64,
+}
+
+/// Optimizes noise variance and returns additional metadata for logging.
+///
+/// Length scale is fixed (domain knowledge), only noise is optimized.
+/// This prevents overfitting that occurs when length_scale is in the search grid.
+pub fn optimize_noise_with_metadata(
+    data: &[DataPoint],
+    length_scale: f64,
+) -> Result<OptimizedHyperparameters, GpError> {
+    if data.len() < 2 {
+        return Err(GpError::InsufficientData(data.len()));
+    }
+
+    // Estimate signal variance from data
+    let values: Vec<f64> = data.iter().map(|p| p.value).collect();
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+    let signal_variance = variance.max(1.0);
+
+    // Fine grid for noise ratios (cheap since 1D search)
+    let noise_ratios = [
+        0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5,
+    ];
+
+    let mut best_log_lik = f64::NEG_INFINITY;
+    let mut best_hyperparams: Option<GpHyperparameters> = None;
+    let mut best_noise_ratio = 0.1;
+
+    for &noise_ratio in &noise_ratios {
+        let noise_variance = signal_variance * noise_ratio;
+
+        let hyperparams =
+            match GpHyperparameters::new(length_scale, signal_variance, noise_variance) {
+                Ok(hp) => hp,
+                Err(_) => continue,
+            };
+
+        let model = match GpModel::fit(data, hyperparams.clone()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let log_lik = model.log_marginal_likelihood();
+
+        if log_lik.is_finite() && log_lik > best_log_lik {
+            best_log_lik = log_lik;
+            best_hyperparams = Some(hyperparams);
+            best_noise_ratio = noise_ratio;
+        }
+    }
+
+    best_hyperparams
+        .map(|hp| OptimizedHyperparameters {
+            hyperparams: hp,
+            log_marginal_likelihood: best_log_lik,
+            noise_ratio: best_noise_ratio,
+        })
+        .ok_or_else(|| {
+            GpError::InvalidHyperparameters("noise optimization found no valid hyperparameters".to_string())
+        })
 }
 
 /// Converts a date to days since the reference date.
@@ -631,5 +843,254 @@ mod tests {
         assert!(hp.signal_variance > 0.0);
         assert!(hp.noise_variance > 0.0);
         assert_eq!(hp.length_scale_days, 90.0);
+    }
+
+    #[test]
+    fn test_log_marginal_likelihood_is_finite() {
+        let data = vec![
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 100.0,
+            },
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 105.0,
+            },
+            DataPoint {
+                date: make_date(2024, 3, 1),
+                value: 110.0,
+            },
+            DataPoint {
+                date: make_date(2024, 4, 1),
+                value: 108.0,
+            },
+        ];
+
+        let model = GpModel::fit(&data, GpHyperparameters::default()).unwrap();
+        let log_lik = model.log_marginal_likelihood();
+
+        assert!(
+            log_lik.is_finite(),
+            "Log marginal likelihood should be finite, got {}",
+            log_lik
+        );
+        // Log likelihood is typically negative (it's a log probability)
+        assert!(
+            log_lik < 0.0,
+            "Log marginal likelihood should be negative, got {}",
+            log_lik
+        );
+    }
+
+    #[test]
+    fn test_log_marginal_likelihood_prefers_correct_noise() {
+        // Generate data with known noise level
+        let base_data = vec![
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 100.0,
+            },
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 100.5,
+            },
+            DataPoint {
+                date: make_date(2024, 3, 1),
+                value: 99.5,
+            },
+            DataPoint {
+                date: make_date(2024, 4, 1),
+                value: 100.2,
+            },
+            DataPoint {
+                date: make_date(2024, 5, 1),
+                value: 99.8,
+            },
+        ];
+
+        // With very noisy-looking data (values bounce around), higher noise_variance should fit better
+        let signal_var = 1.0;
+
+        // Low noise model
+        let hp_low = GpHyperparameters::new(90.0, signal_var, 0.01).unwrap();
+        let model_low = GpModel::fit(&base_data, hp_low).unwrap();
+
+        // High noise model
+        let hp_high = GpHyperparameters::new(90.0, signal_var, 0.3).unwrap();
+        let model_high = GpModel::fit(&base_data, hp_high).unwrap();
+
+        // For data that bounces around a constant, higher noise should be preferred
+        assert!(
+            model_high.log_marginal_likelihood() > model_low.log_marginal_likelihood(),
+            "Higher noise model should have higher likelihood for noisy data"
+        );
+    }
+
+    #[test]
+    fn test_optimize_noise_returns_valid_params() {
+        let data = vec![
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 100.0,
+            },
+            DataPoint {
+                date: make_date(2024, 2, 1),
+                value: 105.0,
+            },
+            DataPoint {
+                date: make_date(2024, 3, 1),
+                value: 110.0,
+            },
+            DataPoint {
+                date: make_date(2024, 4, 1),
+                value: 112.0,
+            },
+        ];
+
+        let length_scale = 90.0; // Fixed length scale
+        let hp = optimize_noise(&data, length_scale).unwrap();
+
+        // Length scale should be what we passed
+        assert_eq!(hp.length_scale_days, length_scale);
+        assert!(hp.signal_variance > 0.0);
+        assert!(hp.noise_variance > 0.0);
+
+        // Noise ratio should be reasonable (between 1% and 50% of signal)
+        let noise_ratio = hp.noise_variance / hp.signal_variance;
+        assert!(
+            noise_ratio >= 0.01 && noise_ratio <= 0.5,
+            "Noise ratio {} out of expected range",
+            noise_ratio
+        );
+    }
+
+    #[test]
+    fn test_optimize_noise_with_noisy_data() {
+        // Data with high daily variation - should prefer higher noise ratio
+        let data = vec![
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 80.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 2),
+                value: 81.5,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 3),
+                value: 79.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 4),
+                value: 82.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 5),
+                value: 78.5,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 6),
+                value: 81.0,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 7),
+                value: 79.5,
+            },
+            DataPoint {
+                date: make_date(2024, 1, 8),
+                value: 80.5,
+            },
+        ];
+
+        let length_scale = 60.0; // Body composition length scale
+        let result = optimize_noise_with_metadata(&data, length_scale).unwrap();
+
+        // For high daily variation data, optimizer should find higher noise ratio
+        assert!(
+            result.noise_ratio >= 0.1,
+            "Expected higher noise ratio for noisy data, got {}",
+            result.noise_ratio
+        );
+    }
+
+    #[test]
+    fn test_optimize_noise_with_smooth_trend() {
+        // Data with clear smooth trend - should have low noise ratio
+        let data = vec![
+            DataPoint {
+                date: make_date(2024, 1, 1),
+                value: 100.0,
+            },
+            DataPoint {
+                date: make_date(2024, 3, 1),
+                value: 105.0,
+            },
+            DataPoint {
+                date: make_date(2024, 5, 1),
+                value: 110.0,
+            },
+            DataPoint {
+                date: make_date(2024, 7, 1),
+                value: 115.0,
+            },
+            DataPoint {
+                date: make_date(2024, 9, 1),
+                value: 120.0,
+            },
+            DataPoint {
+                date: make_date(2024, 11, 1),
+                value: 125.0,
+            },
+        ];
+
+        let length_scale = 90.0;
+        let result = optimize_noise_with_metadata(&data, length_scale).unwrap();
+
+        // For smooth trend data with fixed length scale, noise should be relatively low
+        assert!(
+            result.noise_ratio <= 0.3,
+            "Expected lower noise ratio for smooth trend, got {}",
+            result.noise_ratio
+        );
+    }
+
+    #[test]
+    fn test_optimize_noise_insufficient_data() {
+        let data = vec![DataPoint {
+            date: make_date(2024, 1, 1),
+            value: 100.0,
+        }];
+
+        let result = optimize_noise(&data, 90.0);
+        assert!(matches!(result, Err(GpError::InsufficientData(1))));
+    }
+
+    #[test]
+    fn test_gp_config_default_values() {
+        let config = GpConfig::default();
+
+        assert_eq!(config.length_scale_strength, 90.0);
+        assert_eq!(config.length_scale_body_comp, 60.0);
+        assert_eq!(config.length_scale_energy, 60.0);
+    }
+
+    #[test]
+    fn test_gp_config_length_scale_for_movements() {
+        let config = GpConfig::default();
+
+        // Strength movements
+        assert_eq!(config.length_scale_for(Movement::Squat), 90.0);
+        assert_eq!(config.length_scale_for(Movement::Bench), 90.0);
+        assert_eq!(config.length_scale_for(Movement::Deadlift), 90.0);
+        assert_eq!(config.length_scale_for(Movement::Snatch), 90.0);
+        assert_eq!(config.length_scale_for(Movement::CleanAndJerk), 90.0);
+
+        // Body composition
+        assert_eq!(config.length_scale_for(Movement::Bodyweight), 60.0);
+        assert_eq!(config.length_scale_for(Movement::Neck), 60.0);
+        assert_eq!(config.length_scale_for(Movement::Waist), 60.0);
+
+        // Energy
+        assert_eq!(config.length_scale_for(Movement::Calorie), 60.0);
     }
 }

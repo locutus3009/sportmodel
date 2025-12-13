@@ -24,6 +24,7 @@ use crate::analysis::{
     MovementAnalysis, analyze_training_data, find_most_reliable_date_olympic,
     find_most_reliable_date_powerlifting,
 };
+use crate::gp::GpConfig;
 use crate::domain::Movement;
 use crate::excel::{load_observations, load_training_data};
 use crate::formulas::{calculate_ipf_gl, calculate_sinclair};
@@ -62,9 +63,12 @@ async fn main() -> Result<()> {
         .canonicalize()
         .with_context(|| format!("Failed to resolve path: {}", args.file.display()))?;
 
+    // Create GP configuration once - used for all analysis
+    let gp_config = GpConfig::default();
+
     // Load initial training data
     println!("Loading training data from: {}", file_path.display());
-    let initial_data = load_and_analyze(&file_path)?;
+    let initial_data = load_and_analyze(&file_path, &gp_config)?;
 
     // Create broadcast channel for WebSocket notifications
     let (ws_tx, _) = broadcast::channel::<WsMessage>(16);
@@ -74,6 +78,7 @@ async fn main() -> Result<()> {
         data: RwLock::new(initial_data),
         file_path: file_path.clone(),
         ws_broadcast: ws_tx,
+        gp_config,
     });
 
     // Determine static directory (relative to executable or cwd)
@@ -113,7 +118,7 @@ async fn main() -> Result<()> {
 }
 
 /// Loads training data and runs analysis, returning AnalysisData.
-fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
+fn load_and_analyze(file_path: &PathBuf, gp_config: &GpConfig) -> Result<AnalysisData> {
     let data = load_training_data(file_path)
         .with_context(|| format!("Failed to load training data from {}", file_path.display()))?;
 
@@ -154,7 +159,7 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
     let prediction_start = today - Duration::days(5 * 365);
     let prediction_end = today + Duration::days(360);
 
-    let analysis_results = analyze_training_data(&data, prediction_start, prediction_end);
+    let analysis_results = analyze_training_data(&data, prediction_start, prediction_end, gp_config);
 
     // Count movements with predictions
     let movements_with_predictions = analysis_results
@@ -195,8 +200,8 @@ fn load_and_analyze(file_path: &PathBuf) -> Result<AnalysisData> {
     println!();
     println!("=== Calculating Body Composition ===");
 
-    let body_fat = body_composition::analyze_body_fat(&analysis_results, prediction_start, prediction_end);
-    let lbm = body_composition::analyze_lbm(&analysis_results, prediction_start, prediction_end);
+    let body_fat = body_composition::analyze_body_fat(&analysis_results, prediction_start, prediction_end, gp_config);
+    let lbm = body_composition::analyze_lbm(&analysis_results, prediction_start, prediction_end, gp_config);
 
     match &body_fat {
         Some(bf) if bf.has_predictions() => {
@@ -332,7 +337,7 @@ async fn reload_with_retry(state: &AppState, config: &WatcherConfig) {
     let mut last_error = None;
 
     for attempt in 0..config.retry_attempts {
-        match load_and_analyze(&state.file_path) {
+        match load_and_analyze(&state.file_path, &state.gp_config) {
             Ok(new_data) => {
                 // Update state
                 let mut data = state.data.write().await;

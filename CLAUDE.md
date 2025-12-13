@@ -61,12 +61,14 @@ sportmodel/
 - `calculate_sinclair`: Sinclair score for Olympic lifting
 
 ### gp.rs
+- `GpConfig`: Per-movement length scale configuration (strength=90d, body_comp=60d, energy=60d)
 - `GpHyperparameters`: Length scale, signal variance, noise variance
 - `GpPrediction`: Mean prediction with standard deviation (used for sigma bands)
-- `GpModel`: Fitted GP model with `fit()`, `predict()`, `predict_range()`
+- `GpModel`: Fitted GP model with `fit()`, `predict()`, `predict_range()`, `log_marginal_likelihood()`
   - Caches Cholesky decomposition from `fit()` for efficient variance computation
   - Uses batch matrix operations for variance computation (single solve instead of per-point)
 - `GpError`: Error types for insufficient data, singular matrix, invalid params
+- `optimize_noise_with_metadata()`: Optimizes noise variance via log marginal likelihood (fixed length scale)
 - Uses squared exponential (RBF) kernel with Cholesky decomposition for stability
 
 ### analysis.rs
@@ -77,7 +79,7 @@ sportmodel/
 
 ### server.rs
 - `AnalysisData`: Mutable data container (training data, analyses, composites, TDEE, body composition)
-- `AppState`: Shared state with `RwLock<AnalysisData>`, file path, and WebSocket broadcast
+- `AppState`: Shared state with `RwLock<AnalysisData>`, file path, WebSocket broadcast, and `GpConfig`
 - `WsMessage`: WebSocket message types (`DataUpdated`, `Error`)
 - `create_router()`: Configures axum routes, WebSocket endpoint, and static file serving
 - `run_server()`: Starts the HTTP server
@@ -349,10 +351,34 @@ Excel file (.xlsx) with columns:
 
 ## GP Regression
 
-### Hyperparameters
-- **Length scale**: 90 days (strength changes over months)
+### Hyperparameter Configuration
+
+GP hyperparameters are configured via `GpConfig` (created once in main, passed through call chain):
+
+| Parameter | Strength Movements | Body Composition | Energy |
+|-----------|-------------------|------------------|--------|
+| Length scale | 90 days | 60 days | 60 days |
+| Movements | squat, bench, deadlift, snatch, cj | bodyweight, neck, waist, BF%, LBM | calorie |
+
+**Length scale rationale**:
+- Strength movements use 90 days (changes over months, weekly variation is noise)
+- Body composition uses 60 days (faster response to diet/training changes)
+
+### Hyperparameter Optimization
+
+**Fixed parameters** (domain knowledge):
+- **Length scale**: Per-movement category (see table above)
 - **Signal variance**: Estimated from data variance (min floor of 1.0)
-- **Noise variance**: 5% of signal variance (measurement noise + daily variation)
+
+**Optimized parameter** (via log marginal likelihood):
+- **Noise variance**: Grid search over noise ratios [0.01, 0.02, ..., 0.5]
+
+The log marginal likelihood balances data fit against model complexity:
+```
+log p(y|X,θ) = -½ yᵀK⁻¹y - ½ log|K| - n/2 log(2π)
+```
+- First term: Data fit (prefers models that explain observations)
+- Second term: Complexity penalty (prefers simpler covariance structures)
 
 ### Kernel
 Squared exponential (RBF): `k(x, x') = σ² × exp(-0.5 × (x - x')² / l²)`

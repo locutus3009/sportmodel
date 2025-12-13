@@ -14,7 +14,7 @@ use chrono::NaiveDate;
 
 use crate::analysis::MovementAnalysis;
 use crate::domain::{DataPoint, Movement};
-use crate::gp::{GpHyperparameters, GpModel};
+use crate::gp::{optimize_noise_with_metadata, GpConfig, GpHyperparameters, GpModel};
 
 /// Height constant for BF% calculation (in cm).
 /// This is a user-specific constant that could be made configurable in the future.
@@ -125,10 +125,13 @@ pub fn calculate_raw_lbm_points(
 ///
 /// This is the correct approach: we compute exact BF% from matched measurements,
 /// then let the GP learn the BF% dynamics directly.
+///
+/// Uses body composition length scale and optimizes noise variance via log marginal likelihood.
 pub fn analyze_body_fat(
     analyses: &HashMap<Movement, MovementAnalysis>,
     prediction_start: NaiveDate,
     prediction_end: NaiveDate,
+    gp_config: &GpConfig,
 ) -> Option<MovementAnalysis> {
     let neck_analysis = analyses.get(&Movement::Neck)?;
     let waist_analysis = analyses.get(&Movement::Waist)?;
@@ -149,8 +152,25 @@ pub fn analyze_body_fat(
         });
     }
 
-    // Estimate hyperparameters from BF% data
-    let hyperparams = GpHyperparameters::estimate_from_data(&bf_points).ok()?;
+    let length_scale = gp_config.length_scale_body_composition();
+
+    // Optimize noise variance via log marginal likelihood, fall back to heuristic
+    let hyperparams = match optimize_noise_with_metadata(&bf_points, length_scale) {
+        Ok(opt) => {
+            log::info!(
+                "Body Fat %: l={:.0}, noise_ratio={:.2}, log_lik={:.1} (n={})",
+                length_scale as i32,
+                opt.noise_ratio,
+                opt.log_marginal_likelihood,
+                bf_points.len()
+            );
+            opt.hyperparams
+        }
+        Err(_) => {
+            log::warn!("Body Fat %: optimization failed, using heuristic");
+            GpHyperparameters::estimate_from_data(&bf_points).ok()?
+        }
+    };
 
     // Fit GP model to BF% values directly
     let model = GpModel::fit(&bf_points, hyperparams).ok()?;
@@ -172,10 +192,13 @@ pub fn analyze_body_fat(
 ///
 /// This is the correct approach: we compute exact LBM from matched measurements,
 /// then let the GP learn the LBM dynamics directly.
+///
+/// Uses body composition length scale and optimizes noise variance via log marginal likelihood.
 pub fn analyze_lbm(
     analyses: &HashMap<Movement, MovementAnalysis>,
     prediction_start: NaiveDate,
     prediction_end: NaiveDate,
+    gp_config: &GpConfig,
 ) -> Option<MovementAnalysis> {
     let bodyweight_analysis = analyses.get(&Movement::Bodyweight)?;
     let neck_analysis = analyses.get(&Movement::Neck)?;
@@ -198,8 +221,25 @@ pub fn analyze_lbm(
         });
     }
 
-    // Estimate hyperparameters from LBM data
-    let hyperparams = GpHyperparameters::estimate_from_data(&lbm_points).ok()?;
+    let length_scale = gp_config.length_scale_body_composition();
+
+    // Optimize noise variance via log marginal likelihood, fall back to heuristic
+    let hyperparams = match optimize_noise_with_metadata(&lbm_points, length_scale) {
+        Ok(opt) => {
+            log::info!(
+                "LBM: l={:.0}, noise_ratio={:.2}, log_lik={:.1} (n={})",
+                length_scale as i32,
+                opt.noise_ratio,
+                opt.log_marginal_likelihood,
+                lbm_points.len()
+            );
+            opt.hyperparams
+        }
+        Err(_) => {
+            log::warn!("LBM: optimization failed, using heuristic");
+            GpHyperparameters::estimate_from_data(&lbm_points).ok()?
+        }
+    };
 
     // Fit GP model to LBM values directly
     let model = GpModel::fit(&lbm_points, hyperparams).ok()?;

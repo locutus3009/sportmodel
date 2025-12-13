@@ -388,7 +388,7 @@ function renderChart(data, isComposite) {
         datasets.push({
             label: 'Observations',
             data: data.observations.map(p => ({ x: p.date, y: p.value })),
-            pointRadius: 5,
+            pointRadius: 2.5,
             pointBackgroundColor: COLORS.observation,
             pointBorderColor: COLORS.observation,
             showLine: false,
