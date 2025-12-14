@@ -117,7 +117,10 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             let data = state.data.read().await;
 
             let tdee_info = match &data.tdee {
-                Ok(t) => format!("Average TDEE: {:.0} kcal", t.average_tdee),
+                Ok(t) => format!(
+                    "Data for last 28 days:\nAverage TDEE: {:.0} kcal\nToday TDEE: {:.0} kcal\nAverage intake: {:.0}\nWeight change: {:.0}",
+                    t.average_tdee, t.tdee, t.avg_calories, t.weight_change_kg
+                ),
                 Err(_) => "TDEE: unknown".to_string(),
             };
             drop(data);
@@ -176,7 +179,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             append_excel(&state.file_path, today, calories as f64, None, "calories").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your calories for {:?} is {calories}ccal.", today),
+                format!("Your calories for {:?} is {calories}kcal.", today),
             )
             .await?
         }
