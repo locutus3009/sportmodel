@@ -7,6 +7,7 @@ mod formulas;
 mod gp;
 mod server;
 mod tdee;
+#[cfg(feature = "telegram")]
 mod telegram;
 mod watcher;
 

@@ -253,18 +253,23 @@ pub async fn run_server(
     port: u16,
     static_dir: PathBuf,
 ) -> anyhow::Result<()> {
-    let app = create_router(state, static_dir);
+    let app = create_router(state.clone(), static_dir);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     println!("Server running at http://localhost:{}", port);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
+    #[cfg(feature = "telegram")]
+    let telegram_fut = crate::telegram::start_bot(state);
+    #[cfg(not(feature = "telegram"))]
+    let telegram_fut = std::future::pending::<()>();
+
     tokio::select! {
     result = axum::serve(listener, app) => {
         result?;
     }
-    _ = crate::telegram::start_bot() => {}
+    _ = telegram_fut => {}
     _ = shutdown_signal() => {
         log::info!("Shutting down...");
     }

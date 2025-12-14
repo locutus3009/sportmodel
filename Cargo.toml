@@ -3,6 +3,10 @@ name = "sportmodel"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+telegram = ["dep:teloxide", "dep:umya-spreadsheet"]
+
 [dependencies]
 calamine = { version = "0.32", features = ["chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -25,4 +29,5 @@ serde_json = "1"
 notify = "8.2"
 
 # Telegram bot API
-teloxide = { version = "0.17.0", features = ["macros"] }
+teloxide = { version = "0.17.0", features = ["macros"], optional = true }
+umya-spreadsheet = { version = "2.3.3", optional = true }
