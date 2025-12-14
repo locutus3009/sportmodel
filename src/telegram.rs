@@ -117,7 +117,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             let data = state.data.read().await;
 
             let tdee_info = match &data.tdee {
-                Ok(t) => format!("TDEE: {:.0} kcal", t.tdee),
+                Ok(t) => format!("Average TDEE: {:.0} kcal", t.average_tdee),
                 Err(_) => "TDEE: unknown".to_string(),
             };
             drop(data);
