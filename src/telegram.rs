@@ -37,21 +37,33 @@ enum Command {
     Help,
     #[command(description = "get daily calorie consumption.")]
     Tdee,
-    #[command(description = "handle body weight.")]
+    #[command(description = "[weight] handle body weight.")]
     Bodyweight(f64),
-    #[command(description = "handle back squat.", parse_with = "split")]
+    #[command(
+        description = "[weight] [reps] handle back squat.",
+        parse_with = "split"
+    )]
     Squat(f64, u32),
-    #[command(description = "handle bench press.", parse_with = "split")]
+    #[command(
+        description = "[weight] [reps] handle bench press.",
+        parse_with = "split"
+    )]
     Bench(f64, u32),
-    #[command(description = "handle deadlift.", parse_with = "split")]
+    #[command(description = "[weight] [reps] handle deadlift.", parse_with = "split")]
     Deadlift(f64, u32),
-    #[command(description = "handle snatch.", parse_with = "split")]
+    #[command(description = "[weight] [reps] handle snatch.", parse_with = "split")]
     Snatch(f64, u32),
-    #[command(description = "handle clean & jerk.", parse_with = "split")]
+    #[command(
+        description = "[weight] [reps] handle clean & jerk.",
+        parse_with = "split"
+    )]
     Cj(f64, u32),
-    #[command(description = "handle calories.")]
+    #[command(description = "[calories] handle calories.")]
     Calories(u32),
-    #[command(description = "handle neck and waist.", parse_with = "split")]
+    #[command(
+        description = "[neck] [waist] handle neck and waist.",
+        parse_with = "split"
+    )]
     NeckAndWaist(u32, u32),
 }
 
