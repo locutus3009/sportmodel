@@ -23,3 +23,6 @@ serde_json = "1"
 
 # File watching
 notify = "8.2"
+
+# Telegram bot API
+teloxide = { version = "0.17.0", features = ["macros"] }

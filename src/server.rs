@@ -259,9 +259,16 @@ pub async fn run_server(
     println!("Server running at http://localhost:{}", port);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+
+    tokio::select! {
+    result = axum::serve(listener, app) => {
+        result?;
+    }
+    _ = crate::telegram::start_bot() => {}
+    _ = shutdown_signal() => {
+        log::info!("Shutting down...");
+    }
+    }
 
     log::info!("Server shut down gracefully");
     Ok(())

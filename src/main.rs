@@ -7,6 +7,7 @@ mod formulas;
 mod gp;
 mod server;
 mod tdee;
+mod telegram;
 mod watcher;
 
 use std::collections::HashMap;
