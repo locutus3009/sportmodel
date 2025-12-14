@@ -19,6 +19,7 @@ sportmodel/
 │   ├── server.rs            # Web server (axum) with REST API, WebSocket, and static serving
 │   ├── body_composition.rs  # Body fat % and lean body mass calculations
 │   ├── tdee.rs              # TDEE calculation from calorie and weight data
+│   ├── telegram.rs          # Telegram bot for data entry (optional feature)
 │   └── watcher.rs           # File watching with debouncing for live reload
 ├── static/
 │   ├── index.html      # Dashboard HTML with tab navigation
@@ -103,11 +104,21 @@ sportmodel/
 - `Debouncer`: Collapses rapid successive events into single callbacks
 - Uses notify crate for cross-platform file system watching
 
+### telegram.rs (optional, requires `telegram` feature)
+- `start_bot()`: Starts the Telegram bot dispatcher
+- `Command` enum: Bot commands (Help, Tdee, Bodyweight, Squat, Bench, Deadlift, Snatch, Cj, Calories, NeckAndWaist)
+- `append_excel()`: Appends new rows to the Excel file using umya-spreadsheet
+- `date_to_excel_serial()`: Converts NaiveDate to Excel serial date format
+- Uses teloxide for Telegram Bot API
+
 ## Build and Run
 
 ```bash
 # Build
 cargo build
+
+# Build with Telegram bot support
+cargo build --features telegram
 
 # Run tests
 cargo test
@@ -117,6 +128,9 @@ cargo run -- test_data.xlsx 8080
 
 # Run with logging
 RUST_LOG=warn cargo run -- test_data.xlsx 8080
+
+# Run with Telegram bot (requires TELOXIDE_TOKEN env var)
+TELOXIDE_TOKEN=your_bot_token cargo run --features telegram -- test_data.xlsx 8080
 
 # Generate new test data
 .venv/bin/python scripts/generate_test_data.py
@@ -156,6 +170,7 @@ The service uses environment variables for configuration:
 | `SPORTMODEL_FILE` | Yes | - | Path to Excel training data file |
 | `SPORTMODEL_PORT` | No | 8080 | Web server port |
 | `RUST_LOG` | No | - | Log level (error, warn, info, debug) |
+| `TELOXIDE_TOKEN` | No | - | Telegram bot token (only if built with `telegram` feature) |
 
 Edit `~/.config/systemd/user/sportmodel.service` to set these values. The `%h` placeholder expands to your home directory.
 
@@ -333,6 +348,8 @@ This prevents concurrent file reads, duplicate WebSocket broadcasts, and wastefu
 ## Data Flow
 
 1. **Input**: Excel file with columns Date, Weight, Repetitions, Movement
+   - Manual editing via spreadsheet application
+   - Telegram bot commands (appends rows directly)
 2. **Parsing**: `excel::load_training_data` reads file, validates, creates Observations
 3. **Processing**: `TrainingData::from_observations` converts to DataPoints (e1RM values)
 4. **GP Regression**: `analyze_training_data()` fits GP models per movement
@@ -566,3 +583,61 @@ Uncertainty bands come directly from the GP model fitted to BF%/LBM values. This
 - Ensure the Excel file path is valid and accessible
 - On Linux, check inotify limits: `cat /proc/sys/fs/inotify/max_user_watches`
 - Increase limit if needed: `sudo sysctl fs.inotify.max_user_watches=524288`
+
+## Telegram Bot
+
+The optional Telegram bot allows data entry via chat commands. When enabled, the bot runs concurrently with the web server.
+
+### Setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram
+2. Copy the bot token
+3. Build with the `telegram` feature and set the `TELOXIDE_TOKEN` environment variable
+
+```bash
+# Run with Telegram bot
+TELOXIDE_TOKEN=123456:ABC-DEF... cargo run --features telegram -- data.xlsx 8080
+```
+
+### Available Commands
+
+| Command | Arguments | Description |
+|---------|-----------|-------------|
+| `/help` | - | Display available commands |
+| `/tdee` | - | Get daily calorie consumption |
+| `/bodyweight` | `<weight>` | Record body weight (kg) |
+| `/squat` | `<weight> <reps>` | Record back squat |
+| `/bench` | `<weight> <reps>` | Record bench press |
+| `/deadlift` | `<weight> <reps>` | Record deadlift |
+| `/snatch` | `<weight> <reps>` | Record snatch |
+| `/cj` | `<weight> <reps>` | Record clean & jerk |
+| `/calories` | `<calories>` | Record calorie intake |
+| `/neckandwaist` | `<neck> <waist>` | Record neck and waist measurements (cm) |
+
+### How It Works
+
+1. Commands append rows directly to the Excel file using umya-spreadsheet
+2. Date is set to the current local date automatically
+3. The file watcher detects changes and triggers a reload
+4. WebSocket broadcasts update to connected browsers
+
+### Error Handling
+
+The bot provides helpful error messages for:
+- Missing arguments (shows expected usage)
+- Too many arguments
+- Invalid format (e.g., non-numeric values)
+- Unknown commands (shows help text)
+
+### Feature Flag
+
+The Telegram bot is behind a feature flag to avoid pulling in extra dependencies when not needed:
+
+```toml
+[features]
+telegram = ["dep:teloxide", "dep:umya-spreadsheet"]
+```
+
+Dependencies added by the `telegram` feature:
+- `teloxide`: Telegram Bot API framework
+- `umya-spreadsheet`: Excel file writing (calamine is read-only)
