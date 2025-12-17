@@ -26,6 +26,19 @@ This project is licensed under the GNU General Public License v3.0 (GPLv3). See 
 - Confirmation messages include " [updated]" suffix when updating
 - Prevents accumulation of duplicate daily entries from corrections or multiple submissions
 
+### Fix Excel Phantom Cell Creation
+- **Critical Bug Fix**: Telegram bot `append_excel()` was creating phantom cells during row search
+- **Root Cause**: Using `get_cell_mut()` to read cells during search loop created XML entries for non-existent rows
+- **Symptoms**:
+  - LibreOffice warning: "maximum number of rows per sheet was exceeded"
+  - calamine failed to load files immediately after bot updates
+  - Files worked after LibreOffice re-save (which cleaned phantom cells)
+- **Solution**: Replace `get_cell_mut()` with read-only `get_cell()` during search phase
+  - `get_cell()` returns `Option<&Cell>` - reads existing cells without creating new ones
+  - `get_cell_mut()` still used for actual writes (after finding/creating target row)
+- **Added File Sync**: Explicit `sync_all()` and 50ms delay after write to ensure file watcher sees complete data
+- **Result**: Clean Excel files with no phantom cells, immediate compatibility with calamine
+
 ## Project Structure
 
 ```
@@ -132,11 +145,15 @@ sportmodel/
 - `start_bot()`: Starts the Telegram bot dispatcher
 - `Command` enum: Bot commands (Help, Tdee, Bodyweight, Squat, Bench, Deadlift, Snatch, Cj, Calories, NeckAndWaist)
 - `append_excel()`: Adds or updates rows in the Excel file using umya-spreadsheet
-  - Searches for existing row with matching date and movement type
-  - If found, updates the existing row instead of appending
+  - Searches for existing row with matching date and movement type using `get_cell()` (read-only)
+  - Uses `get_cell()` during search to avoid creating phantom XML entries for non-existent cells
+  - Uses `get_cell_mut()` only for actual writes to target row
+  - If existing row found, updates it instead of appending
   - Returns " [updated]" suffix when updating, empty string when appending
+  - Explicitly syncs file to disk with `sync_all()` and 50ms delay for file watcher compatibility
 - `date_to_excel_serial()`: Converts NaiveDate to Excel serial date format
 - Uses teloxide for Telegram Bot API
+- Uses umya-spreadsheet for Excel writes (calamine is read-only)
 
 ## Build and Run
 

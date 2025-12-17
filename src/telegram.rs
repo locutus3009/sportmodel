@@ -1,5 +1,8 @@
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use chrono::{Local, NaiveDate};
 use teloxide::{
@@ -114,10 +117,23 @@ fn append_excel(
     // Find next empty row or existing row with the same date and type
     let last_row = sheet.get_highest_row() + 1;
     let mut update_row = last_row;
+
+    // Search for existing row - use get_cell (non-mut) to avoid creating phantom cells
     for i in 0..last_row {
-        let date_cell = sheet.get_cell_mut((1, i)).get_value_number();
-        let type_cell = sheet.get_cell_mut((4, i)).get_value();
-        if date_cell == Some(date_excel) && type_cell == type_ {
+        // Try non-mutating access first - only creates cell if it exists
+        let has_date = if let Some(cell) = sheet.get_cell((1, i)) {
+            cell.get_value_number() == Some(date_excel)
+        } else {
+            false
+        };
+
+        let has_matching_type = if let Some(cell) = sheet.get_cell((4, i)) {
+            cell.get_value() == type_
+        } else {
+            false
+        };
+
+        if has_date && has_matching_type {
             update_row = i;
             result = " [updated]";
             break;
@@ -138,8 +154,20 @@ fn append_excel(
     }
     sheet.get_cell_mut((4, update_row)).set_value(type_);
 
-    // Save
+    // Save and explicitly flush to disk
     writer::xlsx::write(&book, path)?;
+    drop(book); // Explicit drop to release file handle
+
+    // Force OS to flush by opening and syncing
+    log::debug!("Syncing Excel file to disk: {}", path.display());
+    let file = File::open(path)?;
+    file.sync_all()?; // Guarantees data and metadata synced to disk
+    drop(file);
+
+    // Small delay to ensure file watcher sees complete file
+    thread::sleep(Duration::from_millis(50));
+    log::debug!("Excel file sync completed");
+
     Ok(result)
 }
 
