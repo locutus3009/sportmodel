@@ -63,6 +63,9 @@ pub struct AppState {
     pub ws_broadcast: broadcast::Sender<WsMessage>,
     /// GP configuration for hyperparameters.
     pub gp_config: GpConfig,
+    /// Telegram user whitelist (empty = discovery mode).
+    #[cfg(feature = "telegram")]
+    pub telegram_allowed_users: Vec<i64>,
 }
 
 /// Analysis data for composite indices (IPF GL, Sinclair).

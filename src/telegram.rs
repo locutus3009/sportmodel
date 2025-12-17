@@ -12,6 +12,31 @@ use umya_spreadsheet::*;
 
 use crate::server::AppState;
 
+/// Checks if a user is authorized based on the whitelist.
+/// Returns true if authorized, false otherwise.
+/// Logs all authorization attempts.
+fn is_authorized(user_id: UserId, allowed: &[i64]) -> bool {
+    let id = user_id.0 as i64;
+
+    if allowed.is_empty() {
+        // Discovery mode: log and deny
+        log::warn!(
+            "Telegram user_id={} DENIED - add to TELEGRAM_ALLOWED_USERS to allow",
+            id
+        );
+        false
+    } else if allowed.contains(&id) {
+        log::info!("Telegram user_id={} authorized", id);
+        true
+    } else {
+        log::warn!(
+            "Telegram user_id={} DENIED - add to TELEGRAM_ALLOWED_USERS to allow",
+            id
+        );
+        false
+    }
+}
+
 pub(crate) async fn start_bot(state: Arc<AppState>) {
     let bot = Bot::from_env();
 
@@ -21,7 +46,7 @@ pub(crate) async fn start_bot(state: Arc<AppState>) {
             .branch(dptree::entry().filter_command::<Command>().endpoint(answer))
             .branch(dptree::filter(|_: Message| true).endpoint(handle_invalid_command)),
     )
-    .dependencies(dptree::deps![state])
+    .dependencies(dptree::deps![state.clone()])
     .build()
     .dispatch()
     .await;
@@ -119,6 +144,15 @@ fn append_excel(
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> ResponseResult<()> {
+    // Authorization check
+    if let Some(ref user) = msg.from {
+        if !is_authorized(user.id, &state.telegram_allowed_users) {
+            bot.send_message(msg.chat.id, "⚠️ Access denied. Contact bot administrator.")
+                .await?;
+            return Ok(());
+        }
+    }
+
     let today = Local::now().date_naive();
     match cmd {
         Command::Help => {
@@ -236,7 +270,20 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
     Ok(())
 }
 
-async fn handle_invalid_command(bot: Bot, msg: Message) -> ResponseResult<()> {
+async fn handle_invalid_command(
+    bot: Bot,
+    msg: Message,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    // Authorization check
+    if let Some(ref user) = msg.from {
+        if !is_authorized(user.id, &state.telegram_allowed_users) {
+            bot.send_message(msg.chat.id, "⚠️ Access denied. Contact bot administrator.")
+                .await?;
+            return Ok(());
+        }
+    }
+
     let text = msg.text().unwrap_or("");
 
     // Try to parse and get the actual error

@@ -68,6 +68,10 @@ async fn main() -> Result<()> {
     // Create GP configuration once - used for all analysis
     let gp_config = GpConfig::default();
 
+    // Parse Telegram user whitelist (if telegram feature enabled)
+    #[cfg(feature = "telegram")]
+    let telegram_allowed_users = parse_telegram_whitelist();
+
     // Load initial training data
     println!("Loading training data from: {}", file_path.display());
     let initial_data = load_and_analyze(&file_path, &gp_config)?;
@@ -81,6 +85,8 @@ async fn main() -> Result<()> {
         file_path: file_path.clone(),
         ws_broadcast: ws_tx,
         gp_config,
+        #[cfg(feature = "telegram")]
+        telegram_allowed_users,
     });
 
     // Determine static directory (relative to executable or cwd)
@@ -568,4 +574,33 @@ fn calculate_sinclair_series(
         most_reliable_date,
         current_value,
     })
+}
+
+/// Parses TELEGRAM_ALLOWED_USERS environment variable.
+/// Returns empty vector for discovery mode, or vector of user IDs for whitelist.
+#[cfg(feature = "telegram")]
+fn parse_telegram_whitelist() -> Vec<i64> {
+    match std::env::var("TELEGRAM_ALLOWED_USERS") {
+        Ok(val) if !val.trim().is_empty() => {
+            let users: Vec<i64> = val
+                .split(',')
+                .filter_map(|s| s.trim().parse::<i64>().ok())
+                .collect();
+
+            if users.is_empty() {
+                log::warn!(
+                    "Telegram auth: DISCOVERY MODE - logging all user IDs, denying all requests"
+                );
+            } else {
+                log::info!("Telegram auth: {} user(s) whitelisted", users.len());
+            }
+            users
+        }
+        _ => {
+            log::warn!(
+                "Telegram auth: DISCOVERY MODE - logging all user IDs, denying all requests"
+            );
+            Vec::new()
+        }
+    }
 }

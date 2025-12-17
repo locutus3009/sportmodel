@@ -626,6 +626,16 @@ The optional Telegram bot allows data entry via chat commands. When enabled, the
 TELOXIDE_TOKEN=123456:ABC-DEF... cargo run --features telegram -- data.xlsx 8080
 ```
 
+### Authorization
+
+The bot uses a user whitelist for access control:
+
+- **Discovery mode**: Leave `TELEGRAM_ALLOWED_USERS` unset or empty. All requests are denied and user IDs are logged.
+- **Whitelist mode**: Set `TELEGRAM_ALLOWED_USERS="123456789,987654321"` with comma-separated user IDs. Only listed users can use the bot.
+- **Finding your ID**: Run in discovery mode, send a message to the bot, check server logs for `user_id=...` entries.
+
+Unauthorized users receive "⚠️ Access denied. Contact bot administrator."
+
 ### Available Commands
 
 | Command | Arguments | Description |
