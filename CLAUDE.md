@@ -26,7 +26,7 @@ This project is licensed under the GNU General Public License v3.0 (GPLv3). See 
 - Confirmation messages include " [updated]" suffix when updating
 - Prevents accumulation of duplicate daily entries from corrections or multiple submissions
 
-### Fix Excel Phantom Cell Creation
+### Fix Excel Phantom Cell Creation (a6381ad)
 - **Critical Bug Fix**: Telegram bot `append_excel()` was creating phantom cells during row search
 - **Root Cause**: Using `get_cell_mut()` to read cells during search loop created XML entries for non-existent rows
 - **Symptoms**:
@@ -38,6 +38,16 @@ This project is licensed under the GNU General Public License v3.0 (GPLv3). See 
   - `get_cell_mut()` still used for actual writes (after finding/creating target row)
 - **Added File Sync**: Explicit `sync_all()` and 50ms delay after write to ensure file watcher sees complete data
 - **Result**: Clean Excel files with no phantom cells, immediate compatibility with calamine
+
+### Fix Authorization Bypass Vulnerability (48d9613)
+- **Security Fix**: Telegram bot authorization could be bypassed if `msg.from` was `None`
+- **Root Cause**: Using `if let Some(ref user) = msg.from` pattern allowed execution to continue when user info was missing
+- **Impact**: Commands could execute without authorization for forwarded messages from channels or other edge cases
+- **Solution**: Use `map_or(false, ...)` pattern to explicitly deny access when user information is missing
+  - Authorization only succeeds when BOTH conditions are met:
+    - `msg.from` is present (Some)
+    - User ID is in the whitelist
+- **Result**: All code paths now require valid user information and whitelist membership
 
 ## Project Structure
 
