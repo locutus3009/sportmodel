@@ -173,12 +173,14 @@ fn append_excel(
 
 async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> ResponseResult<()> {
     // Authorization check
-    if let Some(ref user) = msg.from {
-        if !is_authorized(user.id, &state.telegram_allowed_users) {
-            bot.send_message(msg.chat.id, "⚠️ Access denied. Contact bot administrator.")
-                .await?;
-            return Ok(());
-        }
+    let authorized = msg.from.as_ref().map_or(false, |user| {
+        is_authorized(user.id, &state.telegram_allowed_users)
+    });
+
+    if !authorized {
+        bot.send_message(msg.chat.id, "⚠️ Access denied. Contact bot administrator.")
+            .await?;
+        return Ok(());
     }
 
     let today = Local::now().date_naive();
@@ -304,12 +306,14 @@ async fn handle_invalid_command(
     state: Arc<AppState>,
 ) -> ResponseResult<()> {
     // Authorization check
-    if let Some(ref user) = msg.from {
-        if !is_authorized(user.id, &state.telegram_allowed_users) {
-            bot.send_message(msg.chat.id, "⚠️ Access denied. Contact bot administrator.")
-                .await?;
-            return Ok(());
-        }
+    let authorized = msg.from.as_ref().map_or(false, |user| {
+        is_authorized(user.id, &state.telegram_allowed_users)
+    });
+
+    if !authorized {
+        bot.send_message(msg.chat.id, "⚠️ Access denied. Contact bot administrator.")
+            .await?;
+        return Ok(());
     }
 
     let text = msg.text().unwrap_or("");
