@@ -79,31 +79,43 @@ fn append_excel(
     weight: f64,
     repetitions: Option<u32>,
     type_: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<&'static str, Box<dyn std::error::Error>> {
     // Open existing file
     let mut book = reader::xlsx::read(path)?;
     let sheet = book.get_sheet_mut(&0).ok_or("Sheet not found")?;
+    let date_excel = date_to_excel_serial(date);
+    let mut result = "";
 
-    // Find next empty row
-    let next_row = sheet.get_highest_row() + 1;
+    // Find next empty row or existing row with the same date and type
+    let last_row = sheet.get_highest_row() + 1;
+    let mut update_row = last_row;
+    for i in 0..last_row {
+        let date_cell = sheet.get_cell_mut((1, i)).get_value_number();
+        let type_cell = sheet.get_cell_mut((4, i)).get_value();
+        if date_cell == Some(date_excel) && type_cell == type_ {
+            update_row = i;
+            result = " [updated]";
+            break;
+        }
+    }
 
     // Write cells
-    let date_cell = sheet.get_cell_mut((1, next_row));
-    date_cell.set_value_number(date_to_excel_serial(date));
+    let date_cell = sheet.get_cell_mut((1, update_row));
+    date_cell.set_value_number(date_excel);
     date_cell
         .get_style_mut()
         .get_number_format_mut()
         .set_format_code("yyyy-mm-dd");
 
-    sheet.get_cell_mut((2, next_row)).set_value_number(weight);
+    sheet.get_cell_mut((2, update_row)).set_value_number(weight);
     if let Some(reps) = repetitions {
-        sheet.get_cell_mut((3, next_row)).set_value_number(reps);
+        sheet.get_cell_mut((3, update_row)).set_value_number(reps);
     }
-    sheet.get_cell_mut((4, next_row)).set_value(type_);
+    sheet.get_cell_mut((4, update_row)).set_value(type_);
 
     // Save
     writer::xlsx::write(&book, path)?;
-    Ok(())
+    Ok(result)
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> ResponseResult<()> {
@@ -128,67 +140,94 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             bot.send_message(msg.chat.id, tdee_info).await?
         }
         Command::Bodyweight(bodyweight) => {
-            append_excel(&state.file_path, today, bodyweight, None, "bodyweight").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your body weight for {:?} is {bodyweight}kg.", today),
+                format!(
+                    "Your body weight for {:?} is {bodyweight}kg.{}",
+                    today,
+                    append_excel(&state.file_path, today, bodyweight, None, "bodyweight").unwrap()
+                ),
             )
             .await?
         }
         Command::Squat(weight, reps) => {
-            append_excel(&state.file_path, today, weight, Some(reps), "squat").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your back squat for {:?} is {weight}kg x {reps}.", today),
+                format!(
+                    "Your back squat for {:?} is {weight}kg x {reps}.{}",
+                    today,
+                    append_excel(&state.file_path, today, weight, Some(reps), "squat").unwrap()
+                ),
             )
             .await?
         }
         Command::Bench(weight, reps) => {
-            append_excel(&state.file_path, today, weight, Some(reps), "bench").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your bench press for {:?} is {weight}kg x {reps}.", today),
+                format!(
+                    "Your bench press for {:?} is {weight}kg x {reps}.{}",
+                    today,
+                    append_excel(&state.file_path, today, weight, Some(reps), "bench").unwrap()
+                ),
             )
             .await?
         }
         Command::Deadlift(weight, reps) => {
-            append_excel(&state.file_path, today, weight, Some(reps), "deadlift").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your deadlift for {:?} is {weight}kg x {reps}.", today),
+                format!(
+                    "Your deadlift for {:?} is {weight}kg x {reps}.{}",
+                    today,
+                    append_excel(&state.file_path, today, weight, Some(reps), "deadlift").unwrap()
+                ),
             )
             .await?
         }
         Command::Snatch(weight, reps) => {
-            append_excel(&state.file_path, today, weight, Some(reps), "snatch").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your snatch for {:?} is {weight}kg x {reps}.", today),
+                format!(
+                    "Your snatch for {:?} is {weight}kg x {reps}.{}",
+                    today,
+                    append_excel(&state.file_path, today, weight, Some(reps), "snatch").unwrap()
+                ),
             )
             .await?
         }
         Command::Cj(weight, reps) => {
-            append_excel(&state.file_path, today, weight, Some(reps), "cj").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your clean & jerk for {:?} is {weight}kg x {reps}.", today),
+                format!(
+                    "Your clean & jerk for {:?} is {weight}kg x {reps}.{}",
+                    today,
+                    append_excel(&state.file_path, today, weight, Some(reps), "cj").unwrap()
+                ),
             )
             .await?
         }
         Command::Calories(calories) => {
-            append_excel(&state.file_path, today, calories as f64, None, "calories").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your calories for {:?} is {calories}kcal.", today),
+                format!(
+                    "Your calories for {:?} is {calories}kcal.{}",
+                    today,
+                    append_excel(&state.file_path, today, calories as f64, None, "calories")
+                        .unwrap()
+                ),
             )
             .await?
         }
         Command::NeckAndWaist(neck, waist) => {
-            append_excel(&state.file_path, today, neck as f64, None, "neck").unwrap();
-            append_excel(&state.file_path, today, waist as f64, None, "waist").unwrap();
+            let updated1 =
+                append_excel(&state.file_path, today, neck as f64, None, "neck").unwrap();
+            let updated2 =
+                append_excel(&state.file_path, today, waist as f64, None, "waist").unwrap();
             bot.send_message(
                 msg.chat.id,
-                format!("Your neck for {:?} is {neck}cm, waist is {waist}cm.", today),
+                format!(
+                    "Your neck for {:?} is {neck}cm{updated1}, waist is {waist}cm{updated2}.",
+                    today
+                ),
             )
             .await?
         }
