@@ -2,6 +2,30 @@
 
 Personal strength training analytics tool for Olympic weightlifting and powerlifting. Reads training data from Excel files, applies Gaussian Process regression for trend analysis, and serves a web interface with graphs.
 
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPLv3). See LICENSE.txt for details.
+
+## Recent Changes (since 3398a81)
+
+### GPLv3 License (b6db3f2)
+- Added LICENSE.txt file with full GPLv3 text
+- Added license field to Cargo.toml
+
+### Enhanced TDEE Command (94100e6, c6763cd, e911e8a)
+- The `/tdee` Telegram command now displays comprehensive 28-day analysis:
+  - Average TDEE (smoothed over 10 days)
+  - Today's raw TDEE
+  - Average calorie intake
+  - Weight change in kg
+
+### Update Existing Rows (442660e)
+- Telegram bot now intelligently updates existing spreadsheet entries
+- When recording data for today's date, searches for existing entry with matching date and movement type
+- Updates the existing row instead of creating duplicates
+- Confirmation messages include " [updated]" suffix when updating
+- Prevents accumulation of duplicate daily entries from corrections or multiple submissions
+
 ## Project Structure
 
 ```
@@ -107,7 +131,10 @@ sportmodel/
 ### telegram.rs (optional, requires `telegram` feature)
 - `start_bot()`: Starts the Telegram bot dispatcher
 - `Command` enum: Bot commands (Help, Tdee, Bodyweight, Squat, Bench, Deadlift, Snatch, Cj, Calories, NeckAndWaist)
-- `append_excel()`: Appends new rows to the Excel file using umya-spreadsheet
+- `append_excel()`: Adds or updates rows in the Excel file using umya-spreadsheet
+  - Searches for existing row with matching date and movement type
+  - If found, updates the existing row instead of appending
+  - Returns " [updated]" suffix when updating, empty string when appending
 - `date_to_excel_serial()`: Converts NaiveDate to Excel serial date format
 - Uses teloxide for Telegram Bot API
 
@@ -604,7 +631,7 @@ TELOXIDE_TOKEN=123456:ABC-DEF... cargo run --features telegram -- data.xlsx 8080
 | Command | Arguments | Description |
 |---------|-----------|-------------|
 | `/help` | - | Display available commands |
-| `/tdee` | - | Get daily calorie consumption |
+| `/tdee` | - | Display 28-day TDEE analysis (average TDEE, today's TDEE, avg intake, weight change) |
 | `/bodyweight` | `<weight>` | Record body weight (kg) |
 | `/squat` | `<weight> <reps>` | Record back squat |
 | `/bench` | `<weight> <reps>` | Record bench press |
@@ -616,10 +643,12 @@ TELOXIDE_TOKEN=123456:ABC-DEF... cargo run --features telegram -- data.xlsx 8080
 
 ### How It Works
 
-1. Commands append rows directly to the Excel file using umya-spreadsheet
+1. Commands add or update rows in the Excel file using umya-spreadsheet
 2. Date is set to the current local date automatically
-3. The file watcher detects changes and triggers a reload
-4. WebSocket broadcasts update to connected browsers
+3. If an entry already exists for today's date and movement type, it is updated instead of creating a duplicate
+4. Confirmation messages include " [updated]" suffix when updating existing entries
+5. The file watcher detects changes and triggers a reload
+6. WebSocket broadcasts update to connected browsers
 
 ### Error Handling
 
