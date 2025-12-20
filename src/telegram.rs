@@ -13,7 +13,8 @@ use teloxide::{
 };
 use umya_spreadsheet::*;
 
-use crate::server::AppState;
+use crate::domain::Movement;
+use crate::server::{AppState, WsMessage};
 
 /// Checks if a user is authorized based on the whitelist.
 /// Returns true if authorized, false otherwise.
@@ -171,6 +172,45 @@ fn append_excel(
     Ok(result)
 }
 
+/// Spawns an async task to wait for data reload and send chart.
+///
+/// This function waits for DataUpdated event on the provided receiver,
+/// then generates and sends a chart for the specified movement.
+fn spawn_chart_sender(bot: Bot, state: Arc<AppState>, chat_id: ChatId, movement: Movement) {
+    let mut rx = state.ws_broadcast.subscribe();
+
+    tokio::spawn(async move {
+        // Wait for DataUpdated with timeout
+        let timeout_duration = Duration::from_secs(5);
+        let result = tokio::time::timeout(timeout_duration, async {
+            while let Ok(msg) = rx.recv().await {
+                if matches!(msg, WsMessage::DataUpdated) {
+                    drop(rx);
+                    return true;
+                }
+            }
+            log::warn!("Broadcast loop ended without DataUpdated");
+            false
+        })
+        .await;
+
+        match result {
+            Ok(true) => {
+                log::info!("Data reload completed, generating chart for {:?}", movement);
+                let _ = bot
+                    .send_message(chat_id, format!("Placeholder for {:?} chart", movement))
+                    .await;
+            }
+            Ok(false) => {
+                log::error!("Broadcast channel closed while waiting for data reload");
+            }
+            Err(_) => {
+                log::error!("Timeout waiting for data reload for {:?} chart", movement);
+            }
+        }
+    });
+}
+
 async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> ResponseResult<()> {
     // Authorization check
     let authorized = msg.from.as_ref().map_or(false, |user| {
@@ -204,6 +244,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             bot.send_message(msg.chat.id, tdee_info).await?
         }
         Command::Bodyweight(bodyweight) => {
+            spawn_chart_sender(
+                bot.clone(),
+                Arc::clone(&state),
+                msg.chat.id,
+                Movement::Bodyweight,
+            );
+
             bot.send_message(
                 msg.chat.id,
                 format!(
@@ -215,6 +262,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             .await?
         }
         Command::Squat(weight, reps) => {
+            spawn_chart_sender(
+                bot.clone(),
+                Arc::clone(&state),
+                msg.chat.id,
+                Movement::Squat,
+            );
+
             bot.send_message(
                 msg.chat.id,
                 format!(
@@ -226,6 +280,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             .await?
         }
         Command::Bench(weight, reps) => {
+            spawn_chart_sender(
+                bot.clone(),
+                Arc::clone(&state),
+                msg.chat.id,
+                Movement::Bench,
+            );
+
             bot.send_message(
                 msg.chat.id,
                 format!(
@@ -237,6 +298,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             .await?
         }
         Command::Deadlift(weight, reps) => {
+            spawn_chart_sender(
+                bot.clone(),
+                Arc::clone(&state),
+                msg.chat.id,
+                Movement::Deadlift,
+            );
+
             bot.send_message(
                 msg.chat.id,
                 format!(
@@ -248,6 +316,13 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             .await?
         }
         Command::Snatch(weight, reps) => {
+            spawn_chart_sender(
+                bot.clone(),
+                Arc::clone(&state),
+                msg.chat.id,
+                Movement::Snatch,
+            );
+
             bot.send_message(
                 msg.chat.id,
                 format!(
@@ -259,6 +334,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
             .await?
         }
         Command::Cj(weight, reps) => {
+            // Spawn task to send chart after data reload
+            spawn_chart_sender(
+                bot.clone(),
+                Arc::clone(&state),
+                msg.chat.id,
+                Movement::CleanAndJerk,
+            );
+
             bot.send_message(
                 msg.chat.id,
                 format!(
