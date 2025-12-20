@@ -92,7 +92,7 @@ enum Command {
         description = "[neck] [waist] handle neck and waist.",
         parse_with = "split"
     )]
-    NeckAndWaist(u32, u32),
+    NeckAndWaist(f64, f64),
 }
 
 fn date_to_excel_serial(date: NaiveDate) -> f64 {
