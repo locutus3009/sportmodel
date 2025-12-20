@@ -6,7 +6,7 @@ license = "GPLv3"
 
 [features]
 default = []
-telegram = ["dep:teloxide", "dep:umya-spreadsheet"]
+telegram = ["dep:teloxide", "dep:umya-spreadsheet", "dep:plotters", "dep:image"]
 
 [dependencies]
 calamine = { version = "0.32", features = ["chrono"] }
@@ -32,3 +32,5 @@ notify = "8.2"
 # Telegram bot API
 teloxide = { version = "0.17.0", features = ["macros"], optional = true }
 umya-spreadsheet = { version = "2.3.3", optional = true }
+plotters = { version = "0.3.3", optional = true }
+image = { version = "0.24", optional = true }

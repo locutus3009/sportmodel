@@ -2,19 +2,24 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
-use chrono::{Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate};
 use teloxide::{
     dispatching::UpdateFilterExt,
     dptree,
     prelude::*,
+    types::InputFile,
     utils::command::{BotCommands, ParseError},
 };
 use umya_spreadsheet::*;
 
 use crate::domain::Movement;
 use crate::server::{AppState, WsMessage};
+
+use image::{ImageBuffer, ImageOutputFormat, Rgb}; // Add these imports
+use plotters::prelude::*;
+use plotters::style::Color;
+use std::io::Cursor;
 
 /// Checks if a user is authorized based on the whitelist.
 /// Returns true if authorized, false otherwise.
@@ -166,10 +171,157 @@ fn append_excel(
     drop(file);
 
     // Small delay to ensure file watcher sees complete file
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(std::time::Duration::from_millis(50));
     log::debug!("Excel file sync completed");
 
     Ok(result)
+}
+
+async fn create_plot(
+    state: Arc<AppState>,
+    movement: Movement,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let today = Local::now().date_naive();
+    let start_date = today - Duration::days(180);
+    let end_date = today + Duration::days(90);
+
+    let data = state.data.read().await;
+    let (observations, predictions) = {
+        let raw_obs = data
+            .training_data
+            .get(movement)
+            .map(|points| {
+                points
+                    .iter()
+                    .filter(|p| p.date >= start_date && p.date <= today)
+                    .map(|p| (p.date, p.value))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let preds = data
+            .analyses
+            .get(&movement)
+            .map(|analysis| {
+                analysis
+                    .predictions
+                    .iter()
+                    .filter(|p| p.date >= start_date && p.date <= end_date)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        (raw_obs, preds)
+    };
+
+    const HEIGHT: usize = 600;
+    const WIDTH: usize = 1000;
+    let mut plot_data = vec![0; HEIGHT * WIDTH * 3];
+
+    {
+        let root =
+            BitMapBackend::with_buffer(&mut plot_data, (WIDTH.try_into()?, HEIGHT.try_into()?))
+                .into_drawing_area();
+
+        let bg_color = RGBColor(30, 30, 30);
+        let text_color = RGBColor(176, 176, 176);
+        let accent_color = RGBColor(33, 150, 243);
+        let success_color = RGBColor(76, 175, 80);
+        let grid_color = RGBColor(61, 61, 61);
+
+        root.fill(&bg_color)?;
+
+        let mut min_y = f64::MAX;
+        let mut max_y = f64::MIN;
+
+        for &(_, val) in &observations {
+            min_y = min_y.min(val);
+            max_y = max_y.max(val);
+        }
+        for pred in &predictions {
+            min_y = min_y.min(pred.mean);
+            max_y = max_y.max(pred.mean);
+        }
+
+        if min_y == f64::MAX {
+            min_y = 0.0;
+            max_y = 100.0;
+        } else {
+            let padding = (max_y - min_y) * 0.1;
+            min_y = (min_y - padding).floor();
+            max_y = (max_y + padding).ceil();
+        }
+
+        // Вычисляем количество меток Y для шага в 1кг
+        let y_label_count = ((max_y - min_y).abs() as usize).max(1);
+
+        let mut chart = ChartBuilder::on(&root)
+            .margin(20)
+            .x_label_area_size(40)
+            .y_label_area_size(50)
+            .build_cartesian_2d(start_date..end_date, min_y..max_y)?;
+
+        chart
+            .configure_mesh()
+            .bold_line_style(grid_color.stroke_width(1))
+            .light_line_style(grid_color.stroke_width(1))
+            .axis_style(grid_color.stroke_width(1))
+            .label_style(("sans-serif", 14).into_font().color(&text_color))
+            // Настройка сетки X: каждые 10 дней
+            .x_labels(20)
+            .x_label_formatter(&|d| d.format("%d.%m").to_string())
+            // Настройка сетки Y: ровно по 1кг
+            .y_labels(y_label_count)
+            .draw()?;
+
+        // Отрисовка CI Polygon
+        let mut ci_polygon = Vec::new();
+        for p in &predictions {
+            ci_polygon.push((p.date, p.ci_upper()));
+        }
+        for p in predictions.iter().rev() {
+            ci_polygon.push((p.date, p.ci_lower()));
+        }
+
+        if !ci_polygon.is_empty() {
+            chart.draw_series(std::iter::once(Polygon::new(
+                ci_polygon,
+                accent_color.mix(0.15).filled(),
+            )))?;
+        }
+
+        // Линия тренда
+        chart.draw_series(LineSeries::new(
+            predictions.iter().map(|p| (p.date, p.mean)),
+            accent_color.stroke_width(2),
+        ))?;
+
+        // Точки данных
+        chart.draw_series(PointSeries::of_element(
+            observations,
+            4,
+            ShapeStyle::from(&success_color).filled(),
+            &|coord, size, style| EmptyElement::at(coord) + Circle::new((0, 0), size, style),
+        ))?;
+
+        // Вертикальная линия "Сегодня"
+        chart.draw_series(LineSeries::new(
+            vec![(today, min_y), (today, max_y)],
+            text_color.mix(0.8).stroke_width(2),
+        ))?;
+
+        root.present()?;
+    }
+
+    let img_buffer: ImageBuffer<Rgb<u8>, _> =
+        ImageBuffer::from_raw(WIDTH as u32, HEIGHT as u32, plot_data)
+            .ok_or("Failed to create image buffer")?;
+
+    let mut png_bytes = Vec::new();
+    let mut cursor = Cursor::new(&mut png_bytes);
+    img_buffer.write_to(&mut cursor, ImageOutputFormat::Png)?;
+
+    Ok(png_bytes)
 }
 
 /// Spawns an async task to wait for data reload and send chart.
@@ -181,7 +333,7 @@ fn spawn_chart_sender(bot: Bot, state: Arc<AppState>, chat_id: ChatId, movement:
 
     tokio::spawn(async move {
         // Wait for DataUpdated with timeout
-        let timeout_duration = Duration::from_secs(5);
+        let timeout_duration = std::time::Duration::from_secs(5);
         let result = tokio::time::timeout(timeout_duration, async {
             while let Ok(msg) = rx.recv().await {
                 if matches!(msg, WsMessage::DataUpdated) {
@@ -197,9 +349,28 @@ fn spawn_chart_sender(bot: Bot, state: Arc<AppState>, chat_id: ChatId, movement:
         match result {
             Ok(true) => {
                 log::info!("Data reload completed, generating chart for {:?}", movement);
-                let _ = bot
-                    .send_message(chat_id, format!("Placeholder for {:?} chart", movement))
-                    .await;
+
+                match create_plot(state, movement).await {
+                    Ok(plot) => {
+                        let send_result = bot
+                            .send_photo(
+                                chat_id,
+                                InputFile::memory(plot).file_name(format!(
+                                    "{:?}_{:?}.png",
+                                    Local::now().date_naive(),
+                                    movement
+                                )),
+                            )
+                            .await;
+
+                        if let Err(e) = send_result {
+                            log::error!("Failed to send chart to Telegram: {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to generate plot: {:?}", e);
+                    }
+                }
             }
             Ok(false) => {
                 log::error!("Broadcast channel closed while waiting for data reload");
@@ -358,7 +529,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command, state: Arc<AppState>) -> R
                 format!(
                     "Your calories for {:?} is {calories}kcal.{}",
                     today,
-                    append_excel(&state.file_path, today, calories as f64, None, "calories")
+                    append_excel(&state.file_path, today, calories as f64, None, "calorie")
                         .unwrap()
                 ),
             )
